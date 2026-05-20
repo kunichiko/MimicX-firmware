@@ -226,6 +226,7 @@
             joystick: {
                 desc: 'ATARI 仕様 / メガドライブ 6 ボタンファイティングパッドを模倣する基板向け (CH32X035G8U6 / atari-joystick 基板)。',
                 releases: [
+                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_joystick_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
                     { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_joystick_v0.6.0.bin', note: 'リブルラブル (XPD-1LR) 対応 / プロトコル 0.5 (req_id + ACK)' },
                     { version: 'v0.5.1', date: '2026-05-06', file: 'firmwares/mimicx_joystick_v0.5.1.bin', note: 'D 線ピン配置更新 (D1=PA5, D2=PA3, D3=PA2, D5=PA4)' },
                     { version: 'v0.5.0', date: '2026-05-06', file: 'firmwares/mimicx_joystick_v0.5.0.bin', note: 'CH32X035G8U6 対応 + atari-joystick 基板のピン配置に同期' },
@@ -235,6 +236,7 @@
             x68k_keyboard: {
                 desc: 'X68000 キーボード基板向け (CH32X035G8U6 / QFN28)。本体側へキーボード信号 (USART1: PB10/PB11, READY: PB12) + マウスポート通信 (USART4 PB9 = MSDATA) を出す。',
                 releases: [
+                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_x68k_keyboard_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
                     { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_x68k_keyboard_v0.6.0.bin', note: 'プロトコル 0.5 (req_id + ACK)' },
                     { version: 'v0.5.2', date: '2026-05-09', file: 'firmwares/mimicx_x68k_keyboard_v0.5.2.bin', note: 'CH32X035G8U6 対応 (USART1=PB10/PB11, READY=PB12, USART4_TX=PB9)' },
                     { version: 'v0.4.0', date: '2026-05-05', file: 'firmwares/mimicx_x68k_keyboard_v0.4.0.bin', note: '旧 C8T6 試作配線専用 (USART2=PA15/PA16, READY=PA17, USART3 PA18) — 新基板では選択しないこと' },
@@ -243,6 +245,7 @@
             combined: {
                 desc: '全機能 (ジョイスティック + X68000 キーボード + マウス) を 1 個の CH32X035G8U6 に同居させたバリアント。joystick / x68k_keyboard 各基板の GPIO がそのまま使える配線で 1 個の MCU を共有する開発・実験向け。MIDI ch は joystick=0 / keyboard=1 / mouse=2。',
                 releases: [
+                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_combined_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
                     { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_combined_v0.6.0.bin', note: 'リブルラブル (XPD-1LR) 対応 / プロトコル 0.5 (req_id + ACK) 対応' },
                     { version: 'v0.5.2', date: '2026-05-10', file: 'firmwares/mimicx_combined_v0.5.2.bin', note: '初回リリース (joystick + x68k_keyboard + x68k_mouse 全部入り)' },
                 ],
