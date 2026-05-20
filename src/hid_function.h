@@ -15,6 +15,15 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------------------
+// ACK status コード (プロトコル仕様 6.1.3 と一致)
+// ---------------------------------------------------------------------------
+#define ACK_STATUS_OK             0x00
+#define ACK_STATUS_UNKNOWN_CMD    0x01
+#define ACK_STATUS_UNKNOWN_KEY    0x02
+#define ACK_STATUS_INVALID_VALUE  0x03
+#define ACK_STATUS_GENERIC_ERROR  0x7F
+
+// ---------------------------------------------------------------------------
 // HID Type 定数 (プロトコル仕様 6.4.2 と一致)
 // ---------------------------------------------------------------------------
 #define HID_TYPE_UNKNOWN   0x00
@@ -66,8 +75,9 @@ typedef struct hid_function_s {
     void (*on_note_off)(uint8_t note);
     void (*on_cc)(uint8_t cc, uint8_t value);
 
-    // SysEx SET_CONFIG (全機能に broadcast)
-    void (*on_set_config)(uint8_t key, const uint8_t* val, int len);
+    // SysEx SET_CONFIG (全機能に broadcast)。
+    // 返り値: ACK_STATUS_*。key が自分の管轄でなければ ACK_STATUS_UNKNOWN_KEY を返す。
+    uint8_t (*on_set_config)(uint8_t key, const uint8_t* val, int len);
 
     // メインループから定期呼び出し
     void (*poll)(void);

@@ -4,8 +4,9 @@
 #include <stdint.h>
 
 // パッドモード
-#define PAD_MODE_ATARI  0
-#define PAD_MODE_MD6    1
+#define PAD_MODE_ATARI          0
+#define PAD_MODE_MD6            1
+#define PAD_MODE_LIBBLE_RABBLE  2  // XPD-1LR 互換 (左右十字キー + 中央 A/B)
 
 // MIDI Note 番号 → ボタンインデックス
 #define BTN_UP      0
@@ -20,7 +21,13 @@
 #define BTN_Y       9
 #define BTN_Z       10
 #define BTN_MODE    11
-#define BTN_COUNT   12
+// リブルラブル (XPD-1LR) 右側 D-pad。
+// X68000 が COMMON (PA0/TH) を HIGH にしている期間にホストへ返す方向状態。
+#define BTN_UP2     12
+#define BTN_DOWN2   13
+#define BTN_LEFT2   14
+#define BTN_RIGHT2  15
+#define BTN_COUNT   16
 
 // GPIO ピン割り当て (ATARI / X68000 標準 D-SUB 9pin 配線済み)
 // MimicX-hardware/atari-joystick の atari_joystick.ato と同期

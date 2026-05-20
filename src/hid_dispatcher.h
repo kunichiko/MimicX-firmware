@@ -23,8 +23,12 @@ void hid_dispatch_note_on(uint8_t channel, uint8_t note, uint8_t velocity);
 void hid_dispatch_note_off(uint8_t channel, uint8_t note);
 void hid_dispatch_cc(uint8_t channel, uint8_t cc, uint8_t value);
 
-// SysEx SET_CONFIG (全機能に broadcast)
-void hid_dispatch_set_config(uint8_t key, const uint8_t* val, int len);
+// SysEx SET_CONFIG (全機能に broadcast)。
+// 返り値: 集約された ACK_STATUS_*。
+// - いずれかの機能が OK を返したら OK
+// - いずれかの機能が INVALID_VALUE を返したら INVALID_VALUE 優先
+// - どの機能も key を認識しなかったら UNKNOWN_KEY
+uint8_t hid_dispatch_set_config(uint8_t key, const uint8_t* val, int len);
 
 // IDENTIFY_RESPONSE 用: チャンネルマップを buf に追記
 //   フォーマット: <num_channels> <ch_0> <type_0> <target_0> <ch_1> ... <ASCII name terminator なし>

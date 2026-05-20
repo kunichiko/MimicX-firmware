@@ -57,10 +57,23 @@ void hid_dispatch_cc(uint8_t channel, uint8_t cc, uint8_t value) {
     }
 }
 
-void hid_dispatch_set_config(uint8_t key, const uint8_t* val, int len) {
+uint8_t hid_dispatch_set_config(uint8_t key, const uint8_t* val, int len) {
+    // 集約規則:
+    //   INVALID_VALUE > OK > UNKNOWN_KEY
+    // どれか 1 つでも INVALID_VALUE → INVALID_VALUE (値が key に対して不正)
+    // それ以外でどれか 1 つでも OK → OK
+    // 全部 UNKNOWN_KEY → UNKNOWN_KEY
+    uint8_t result = ACK_STATUS_UNKNOWN_KEY;
     for (int i = 0; i < NUM_FUNCTIONS; i++) {
-        if (fns[i]->on_set_config) fns[i]->on_set_config(key, val, len);
+        if (!fns[i]->on_set_config) continue;
+        uint8_t s = fns[i]->on_set_config(key, val, len);
+        if (s == ACK_STATUS_INVALID_VALUE) {
+            result = ACK_STATUS_INVALID_VALUE;
+        } else if (s == ACK_STATUS_OK && result != ACK_STATUS_INVALID_VALUE) {
+            result = ACK_STATUS_OK;
+        }
     }
+    return result;
 }
 
 // ---------------------------------------------------------------------------

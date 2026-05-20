@@ -36,6 +36,11 @@ static int note_to_btn(uint8_t note) {
     case 12: return BTN_Y;
     case 13: return BTN_Z;
     case 14: return BTN_MODE;
+    // 右 D-pad (リブルラブル XPD-1LR の右レバー)
+    case 15: return BTN_UP2;
+    case 16: return BTN_DOWN2;
+    case 17: return BTN_LEFT2;
+    case 18: return BTN_RIGHT2;
     default: return -1;
     }
 }
@@ -97,6 +102,48 @@ static volatile uint32_t md6_lut_falling[4];
 static volatile uint32_t md6_lut_rising[4];
 
 #define D_PINS_MASK ((1<<PIN_D0)|(1<<PIN_D1)|(1<<PIN_D2)|(1<<PIN_D3)|(1<<PIN_D4)|(1<<PIN_D5))
+
+// ---------------------------------------------------------------------------
+// リブルラブル XPD-1LR: 左右レバーを TH で時分割多重
+// ---------------------------------------------------------------------------
+// 純正 XPD-1LR は pin 8 (TH/COMMON) をそのまま左レバーの COMMON に、
+// インバータ反転信号を右レバーの COMMON にしている。本ファームでは
+// TH のエッジでバンクを切り替え、左右レバー状態を D0-D3 に乗せ替える。
+//   TH = LOW (falling edge) → 左レバー (BTN_UP/DOWN/LEFT/RIGHT)
+//   TH = HIGH (rising edge) → 右レバー (BTN_UP2/DOWN2/LEFT2/RIGHT2)
+// A/B ボタン (D4/D5) は左右共通で常時出力。
+static volatile uint32_t lr_lut_falling[1];
+static volatile uint32_t lr_lut_rising[1];
+
+// D0..D5 の active 配列から BSHR フォーマット (set | reset<<16) を組み立てる
+static inline uint32_t pack_d_bshr(uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3,
+                                   uint8_t d4, uint8_t d5) {
+    static const uint8_t pins[6] = {PIN_D0, PIN_D1, PIN_D2, PIN_D3, PIN_D4, PIN_D5};
+    const uint8_t vals[6] = {d0, d1, d2, d3, d4, d5};
+    uint32_t set = 0, reset = 0;
+    for (int p = 0; p < 6; p++) {
+        uint32_t bit = 1u << pins[p];
+        if (vals[p]) reset |= bit;   // active = Low (BCR 部)
+        else         set   |= bit;   // inactive = Hi-Z (BSR 部)
+    }
+    return set | (reset << 16);
+}
+
+static void lr_rebuild_lut(void) {
+    uint8_t a = btn_state[BTN_A];
+    uint8_t b = btn_state[BTN_B];
+
+    // TH=LOW: 左 D-pad
+    lr_lut_falling[0] = pack_d_bshr(
+        btn_state[BTN_UP], btn_state[BTN_DOWN],
+        btn_state[BTN_LEFT], btn_state[BTN_RIGHT],
+        a, b);
+    // TH=HIGH: 右 D-pad
+    lr_lut_rising[0] = pack_d_bshr(
+        btn_state[BTN_UP2], btn_state[BTN_DOWN2],
+        btn_state[BTN_LEFT2], btn_state[BTN_RIGHT2],
+        a, b);
+}
 
 // btn_state を元に LUT を再計算する
 // active=1 のビットを BCR (Low)、active=0 を BSHR (Hi-Z) に振り分ける
@@ -204,16 +251,23 @@ static void dma_channel_setup(DMA_Channel_TypeDef* ch, void* src, int count) {
         (1 << 0);   // EN = 1
 }
 
-// DMA ポインタを先頭 (Step 1) に戻す
+// TH エッジ駆動 DMA で使う現在のソース。
+// MD6 は 4 ステップ循環、リブルラブルは 1 エントリ循環 (CNTR=1 で常に同じ位置)。
+static volatile uint32_t* th_dma_src_falling = md6_lut_falling;
+static volatile uint32_t* th_dma_src_rising  = md6_lut_rising;
+static uint8_t th_dma_count = 4;
+
+// DMA ポインタを先頭に戻す。MD6 は 8 ステップサイクルの先頭、リブルラブルは
+// 唯一のエントリへ。circular DMA なので CNTR=1 のリブルラブルでは事実上 no-op。
 static void md6_dma_reset(void) {
     DMA1_Channel5->CFGR &= ~1;
-    DMA1_Channel5->CNTR  = 4;
-    DMA1_Channel5->MADDR = (uint32_t)md6_lut_falling;
+    DMA1_Channel5->CNTR  = th_dma_count;
+    DMA1_Channel5->MADDR = (uint32_t)th_dma_src_falling;
     DMA1_Channel5->CFGR |= 1;
 
     DMA1_Channel7->CFGR &= ~1;
-    DMA1_Channel7->CNTR  = 4;
-    DMA1_Channel7->MADDR = (uint32_t)md6_lut_rising;
+    DMA1_Channel7->CNTR  = th_dma_count;
+    DMA1_Channel7->MADDR = (uint32_t)th_dma_src_rising;
     DMA1_Channel7->CFGR |= 1;
 }
 
@@ -284,9 +338,9 @@ static void md6_dma_setup(void) {
     md6_watchdog_setup();
 
     // DMA1_Channel5: TIM2_CH1 (falling) → BSHR
-    dma_channel_setup(DMA1_Channel5, (void*)md6_lut_falling, 4);
+    dma_channel_setup(DMA1_Channel5, (void*)th_dma_src_falling, th_dma_count);
     // DMA1_Channel7: TIM2_CH2 (rising) → BSHR
-    dma_channel_setup(DMA1_Channel7, (void*)md6_lut_rising, 4);
+    dma_channel_setup(DMA1_Channel7, (void*)th_dma_src_rising, th_dma_count);
 
     // TIM2 開始
     TIM2->CTLR1 |= TIM_CEN;
@@ -369,12 +423,23 @@ void joystick_set_mode(uint8_t mode) {
     th_cycle = 0;
 
     if (mode == PAD_MODE_MD6) {
+        th_dma_src_falling = md6_lut_falling;
+        th_dma_src_rising  = md6_lut_rising;
+        th_dma_count       = 4;
         md6_rebuild_lut();
         md6_dma_setup();   // TIM2 input capture + DMA 起動
         // exti_init() は呼ばない (DMA だけで処理)
         // 初期出力: 現在の TH 状態に応じて step 0 または 1
         uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
         GPIOA->BSHR = md6_lut[th_high & 1];
+    } else if (mode == PAD_MODE_LIBBLE_RABBLE) {
+        th_dma_src_falling = lr_lut_falling;
+        th_dma_src_rising  = lr_lut_rising;
+        th_dma_count       = 1;
+        lr_rebuild_lut();
+        md6_dma_setup();   // 同じ TIM2 + DMA 機構を使う
+        uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
+        GPIOA->BSHR = th_high ? lr_lut_rising[0] : lr_lut_falling[0];
     } else {
         // DMA + TIM2 + EXTI 無効化
         md6_dma_disable();
@@ -403,6 +468,10 @@ void joystick_set_button_by_note(uint8_t note, uint8_t pressed) {
         // 現在の TH 状態に応じて即座に出力 (cycle=0 として)
         uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
         GPIOA->BSHR = md6_lut[th_high & 1];
+    } else if (pad_mode == PAD_MODE_LIBBLE_RABBLE) {
+        lr_rebuild_lut();
+        uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
+        GPIOA->BSHR = th_high ? lr_lut_rising[0] : lr_lut_falling[0];
     }
 }
 
@@ -444,10 +513,17 @@ static void joystick_fn_on_note_off(uint8_t note) {
     joystick_set_button_by_note(note, 0);
 }
 
-static void joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int len) {
-    if (key == CONFIG_PAD_MODE && len >= 1) {
-        joystick_set_mode(val[0]);
+static uint8_t joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int len) {
+    if (key != CONFIG_PAD_MODE) return ACK_STATUS_UNKNOWN_KEY;
+    if (len < 1) return ACK_STATUS_INVALID_VALUE;
+    uint8_t mode = val[0];
+    if (mode != PAD_MODE_ATARI &&
+        mode != PAD_MODE_MD6 &&
+        mode != PAD_MODE_LIBBLE_RABBLE) {
+        return ACK_STATUS_INVALID_VALUE;
     }
+    joystick_set_mode(mode);
+    return ACK_STATUS_OK;
 }
 
 static void joystick_fn_poll(void) {

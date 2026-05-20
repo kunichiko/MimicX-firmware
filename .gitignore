@@ -14,3 +14,6 @@ cmake-build-*/
 # IDE
 *.swp
 *.swo
+
+# Claude Code local settings (personal permissions)
+.claude/settings.local.json

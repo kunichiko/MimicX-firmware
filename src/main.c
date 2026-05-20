@@ -25,14 +25,14 @@
 #include "board_config.h"
 
 // ---------------------------------------------------------------------------
-// プロトコル定数 (MimicX-protocol v0.3.0)
+// プロトコル定数 (MimicX-protocol v0.5.0)
 // ---------------------------------------------------------------------------
 
 #define PROTOCOL_VERSION_MAJOR  0
-#define PROTOCOL_VERSION_MINOR  4
+#define PROTOCOL_VERSION_MINOR  5
 #define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  5
-#define FW_VERSION_PATCH  2
+#define FW_VERSION_MINOR  6
+#define FW_VERSION_PATCH  0
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15
@@ -44,6 +44,7 @@
 #define CMD_IDENTIFY_RSP  0x02
 #define CMD_CAPABILITY_REQ 0x03
 #define CMD_CAPABILITY_RSP 0x04
+#define CMD_ACK           0x06
 #define CMD_SET_CONFIG    0x10
 #define CMD_RESET         0x7F
 
@@ -103,16 +104,31 @@ static void send_identify_response(void) {
     usb_midi_send_sysex(rsp, i);
 }
 
-static void send_capability_response(void) {
+static void send_capability_response(uint8_t req_id, uint8_t status) {
     uint8_t rsp[64];
     int i = 0;
     rsp[i++] = 0xF0;
     rsp[i++] = SYSEX_MFR_ID;
     rsp[i++] = SYSEX_SUB_ID;
     rsp[i++] = CMD_CAPABILITY_RSP;
+    rsp[i++] = req_id & 0x7F;
+    rsp[i++] = status & 0x7F;
     i += hid_dispatch_build_capabilities(rsp + i, sizeof(rsp) - i - 1);
     rsp[i++] = 0xF7;
     usb_midi_send_sysex(rsp, i);
+}
+
+// 汎用 ACK (専用レスポンスを持たないコマンド用)
+//   F0 7D 01 06 <req_id> <status> <orig_cmd> F7
+static void send_ack(uint8_t req_id, uint8_t status, uint8_t orig_cmd) {
+    uint8_t rsp[] = {
+        0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, CMD_ACK,
+        (uint8_t)(req_id & 0x7F),
+        (uint8_t)(status & 0x7F),
+        (uint8_t)(orig_cmd & 0x7F),
+        0xF7,
+    };
+    usb_midi_send_sysex(rsp, sizeof(rsp));
 }
 
 static void process_sysex(const uint8_t* data, int len) {
@@ -123,23 +139,43 @@ static void process_sysex(const uint8_t* data, int len) {
     uint8_t cmd = data[3];
     switch (cmd) {
     case CMD_IDENTIFY_REQ:
+        // ブートストラップ用途で req_id を持たない (プロトコル 6.3)
         send_identify_response();
         break;
-    case CMD_CAPABILITY_REQ:
-        send_capability_response();
+    case CMD_CAPABILITY_REQ: {
+        // F0 7D 01 03 <req_id> F7
+        uint8_t req_id = (len >= 6) ? data[4] : 0;
+        send_capability_response(req_id, ACK_STATUS_OK);
         break;
-    case CMD_SET_CONFIG:
-        if (len >= 6) {
-            // F0 7D 01 10 <key> <value...> F7
-            uint8_t key = data[4];
-            const uint8_t* val = data + 5;
-            int val_len = len - 6;  // F7 を除く
-            hid_dispatch_set_config(key, val, val_len);
+    }
+    case CMD_SET_CONFIG: {
+        // F0 7D 01 10 <req_id> <key> <value...> F7
+        if (len < 7) {
+            // 最低でも req_id + key の 2 byte が必要
+            send_ack((len >= 6) ? data[4] : 0, ACK_STATUS_GENERIC_ERROR, cmd);
+            break;
         }
+        uint8_t req_id = data[4];
+        uint8_t key = data[5];
+        const uint8_t* val = data + 6;
+        int val_len = len - 7;  // F0..key+F7 を除く
+        uint8_t status = hid_dispatch_set_config(key, val, val_len);
+        send_ack(req_id, status, cmd);
         break;
-    case CMD_RESET:
+    }
+    case CMD_RESET: {
+        // F0 7D 01 7F <req_id> F7
+        uint8_t req_id = (len >= 6) ? data[4] : 0;
         hid_dispatch_release_all();
+        send_ack(req_id, ACK_STATUS_OK, cmd);
         break;
+    }
+    default: {
+        // 未知のコマンド: req_id が含まれているなら ACK で返す
+        uint8_t req_id = (len >= 6) ? data[4] : 0;
+        send_ack(req_id, ACK_STATUS_UNKNOWN_CMD, cmd);
+        break;
+    }
     }
 }
 
