@@ -1,0 +1,102 @@
+name: Firmware Release
+
+# タグ v*.*.* を push したときに 3 つの env (joystick / x68k_keyboard / combined)
+# を PlatformIO でビルドし、各 firmware.bin を GitHub Release に添付する。
+#
+# トリガ:
+#   - push tag v*.*.*       : 通常リリース (Release 自動作成)
+#   - workflow_dispatch     : 手動実行 (ビルドのみ、Release は作らない)
+#   - pull_request to main  : ビルド検証のみ (Release は作らない)
+
+on:
+  push:
+    tags: ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build firmware
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        env: [joystick, x68k_keyboard, combined]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO core + packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Stage firmware artifact
+        id: stage
+        run: |
+          mkdir -p dist
+          # タグから v を取った値をバージョンとして埋め込む。タグなしビルド
+          # (PR / workflow_dispatch) では "dev-<sha>" にする。
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          OUT="dist/mimicx_${{ matrix.env }}_${VERSION}.bin"
+          cp ".pio/build/${{ matrix.env }}/firmware.bin" "$OUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: ${{ steps.stage.outputs.out }}
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: firmware-*
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.bin
+          generate_release_notes: true
+          draft: false
+          prerelease: false
