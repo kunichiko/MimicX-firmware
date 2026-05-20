@@ -136,6 +136,28 @@ int usb_midi_receive_event(uint8_t* cin, uint8_t* midi0, uint8_t* midi1, uint8_t
 }
 
 void usb_midi_poll(void) {
+    // SUSPEND 状態 (= ホスト無通信 ≥3ms = ケーブル抜去 or ホスト suspend) への
+    // 立ち上がりエッジで USB ペリフェラルを完全再初期化する。
+    //
+    // 背景: X68000 のジョイスティックポートから給電されている状態では USB
+    // Vbus が落ちても MCU はリセットされない。そのため USB peripheral の
+    // 内部ステート (ディスクリプタ要求の途中状態、EP FIFO の残骸など) が
+    // 前回ホストとのセッションのまま残り、次に USB を挿し直すと新しいホスト
+    // (Android) の enumerate で descriptor 取得が中途半端になって 100ms 後に
+    // ホスト側からデバイスが drop される (serial_number=null 現象)。
+    //
+    // SUSPEND を検知した時点でホストは既に居ないので、ここで peripheral を
+    // 作り直しておけば次回挿入時に fresh な状態で enumerate されて取りこぼし
+    // が起きない。
+    static uint8_t prev_suspended = 0;
+    uint8_t suspended_now = (USBFS->MIS_ST & USBFS_UMS_SUSPEND) ? 1 : 0;
+    if (suspended_now && !prev_suspended) {
+        usb_midi_init();
+        prev_suspended = 1;
+        return;
+    }
+    prev_suspended = suspended_now;
+
     // bus reset 後に DMA が上書きされた場合は復旧
     if (UEP_DMA(2) != (uintptr_t)ep2_bidi_buf) {
         UEP_DMA(2) = (uintptr_t)ep2_bidi_buf;
