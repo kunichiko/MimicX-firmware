@@ -15,6 +15,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # Node20 ベースの古いアクションを Node24 で動かす互換フラグ。アクション側の
+  # メジャー更新が追いつかない場合の deprecation 警告を抑える。
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build:
     name: Build firmware
@@ -24,15 +29,15 @@ jobs:
         env: [joystick, x68k_keyboard, combined]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Cache PlatformIO core + packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.platformio/.cache
@@ -66,7 +71,7 @@ jobs:
           ls -la dist/
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ matrix.env }}
           path: ${{ steps.stage.outputs.out }}
@@ -81,10 +86,10 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download all firmware artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: artifacts
           pattern: firmware-*
