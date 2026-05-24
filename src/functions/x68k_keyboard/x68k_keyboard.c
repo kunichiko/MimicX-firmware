@@ -32,12 +32,13 @@
 // ---------------------------------------------------------------------------
 // X68000 から受信した REMOTE 関連の状態フラグ
 // ---------------------------------------------------------------------------
-// X68000 本体は SRAM 設定に応じて起動時にこれらを送ってくる。受信前 (未通知時)
-// の初期値は X68000 純正キーボードに合わせて全 0 とする (= 本体発の制御コードは
-// 無効、OPT.2 不可、モード = X68k)。
-//
-// CTRL_EN ビット (0=有効, 1=無効) は実機検証待ちだが、本実装では「ON 寄り」を
-// 安全側として 0 = 有効として扱う。確証が取れたら反転させる。
+// X68000 本体は SRAM 設定や CPU 状態に応じてこれらを送ってくる。受信前 (未通知時)
+// の初期値:
+//   - key_en   : 1 (送信可) 起動直後はキー送信できないと初期化中の通信が止まるため
+//   - ctrl_en  : 0 (極性未検証だが従来挙動を維持)
+//   - opt2_en  : 0 (極性未検証)
+//   - mode_x1  : 0 (極性未検証)
+static volatile uint8_t key_en       = 1;  // 0b010010*X の X (1=送信可, 0=送信不可)
 static volatile uint8_t ctrl_en_bit  = 0;  // 0b010110*X の X
 static volatile uint8_t opt2_en_bit  = 0;  // 0b010111*X の X (本実装では未使用、app 側で参照)
 static volatile uint8_t mode_x1_bit  = 0;  // 0b010100*X の X (本実装では未使用)
@@ -160,11 +161,16 @@ static void x68k_kb_release_all(void) {
 
 static void x68k_kb_on_note_on(uint8_t note, uint8_t velocity) {
     (void)velocity;
+    // KEY_EN=0 のときは X68000 がキー受付不能状態。送信せずに破棄する
+    // (キューに溜めると後で押下/解放が時系列ズレして表示されるため)。
+    // TV Control (REMOTE 端子) の発射は別経路なので影響を受けない。
+    if (!key_en) return;
     // bit7=0 = make, bit6-0 = スキャンコード
     tx_queue_push(note & 0x7F);
 }
 
 static void x68k_kb_on_note_off(uint8_t note) {
+    if (!key_en) return;
     // bit7=1 = break
     tx_queue_push(0x80 | (note & 0x7F));
 }
@@ -180,10 +186,19 @@ static void x68k_kb_poll(void) {
             x68k_mouse_handle_msctrl(b);
         } else {
             // 状態フラグ系の傍受 (app 側でも解釈するが、firmware も使うので保持)
+            //   0b010010*X: KEY_EN (キー送信許可: 1=可, 0=不可)
             //   0b010100*X: X68k/X1 モード選択
             //   0b010110*X: CTRL EN (本体発ディスプレイ制御の有効/無効)
             //   0b010111*X: OPT2 EN (OPT.2 キーによる発射の許可/禁止 — app 用)
-            if ((b & 0xFC) == 0x50) {
+            if ((b & 0xFC) == 0x48) {
+                key_en = b & 0x01;
+                // KEY_EN=0 に遷移したら未送信のキューを破棄 (時系列ズレ防止)。
+                // 純正キーボードの挙動: 本体 CPU が非応答に入る直前に KEY_EN=0
+                // を送るパターン。送り損ねたキーは諦める。
+                if (!key_en) {
+                    tx_tail = tx_head;
+                }
+            } else if ((b & 0xFC) == 0x50) {
                 mode_x1_bit = b & 0x01;
             } else if ((b & 0xFC) == 0x58) {
                 ctrl_en_bit = b & 0x01;
