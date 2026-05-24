@@ -17,6 +17,7 @@
 #include "funconfig.h"
 #include "../../usb_midi.h"
 #include "../x68k_mouse/x68k_mouse.h"
+#include "sharp12_remote.h"
 
 // ---------------------------------------------------------------------------
 // 設定
@@ -27,6 +28,19 @@
 
 // SysEx TARGET_RX (0x05): ターゲット機から受信した生バイトをホストへ転送
 #define SYSEX_CMD_TARGET_RX  0x05
+
+// ---------------------------------------------------------------------------
+// X68000 から受信した REMOTE 関連の状態フラグ
+// ---------------------------------------------------------------------------
+// X68000 本体は SRAM 設定に応じて起動時にこれらを送ってくる。受信前 (未通知時)
+// の初期値は X68000 純正キーボードに合わせて全 0 とする (= 本体発の制御コードは
+// 無効、OPT.2 不可、モード = X68k)。
+//
+// CTRL_EN ビット (0=有効, 1=無効) は実機検証待ちだが、本実装では「ON 寄り」を
+// 安全側として 0 = 有効として扱う。確証が取れたら反転させる。
+static volatile uint8_t ctrl_en_bit  = 0;  // 0b010110*X の X
+static volatile uint8_t opt2_en_bit  = 0;  // 0b010111*X の X (本実装では未使用、app 側で参照)
+static volatile uint8_t mode_x1_bit  = 0;  // 0b010100*X の X (本実装では未使用)
 
 // ---------------------------------------------------------------------------
 // 送信キュー (READY=Low の間にキーが来ても取りこぼさないため)
@@ -131,6 +145,13 @@ static void forward_target_rx(uint8_t byte) {
 
 static void x68k_kb_init(void) {
     uart_init();
+    sharp12_remote_init();
+}
+
+int x68k_keyboard_emit_remote(uint8_t code) {
+    if (code < 0x01 || code > 0x1F) return 0;
+    sharp12_remote_emit(code);
+    return 1;
 }
 
 static void x68k_kb_release_all(void) {
@@ -158,6 +179,25 @@ static void x68k_kb_poll(void) {
         if ((b & 0xF8) == 0x40) {
             x68k_mouse_handle_msctrl(b);
         } else {
+            // 状態フラグ系の傍受 (app 側でも解釈するが、firmware も使うので保持)
+            //   0b010100*X: X68k/X1 モード選択
+            //   0b010110*X: CTRL EN (本体発ディスプレイ制御の有効/無効)
+            //   0b010111*X: OPT2 EN (OPT.2 キーによる発射の許可/禁止 — app 用)
+            if ((b & 0xFC) == 0x50) {
+                mode_x1_bit = b & 0x01;
+            } else if ((b & 0xFC) == 0x58) {
+                ctrl_en_bit = b & 0x01;
+            } else if ((b & 0xFC) == 0x5C) {
+                opt2_en_bit = b & 0x01;
+            } else if ((b & 0xC0) == 0x00 && b != 0x00) {
+                // 0b00xxxxxx (0x01-0x3F): 本体発の専用ディスプレイ制御コマンド。
+                // CTRL EN が有効 (= 1 と仮定) のときだけ REMOTE 端子から発射する。
+                // app 側にもパススルー (snackbar 用) するために TARGET_RX も併送する。
+                if (ctrl_en_bit && b >= 0x01 && b <= 0x1F) {
+                    sharp12_remote_emit(b);
+                }
+            }
+            // 解釈の有無にかかわらず、app 側で表示・状態管理できるよう生バイトを転送する
             forward_target_rx(b);
         }
     }

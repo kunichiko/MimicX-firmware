@@ -24,15 +24,21 @@
 #include "hid_dispatcher.h"
 #include "board_config.h"
 
+// EMIT_REMOTE (0x07) は x68k_keyboard を搭載する variant でのみ有効。
+// 該当 variant でない場合は CMD_EMIT_REMOTE は UNKNOWN_COMMAND を返す。
+#if defined(BOARD_X68K_KEYBOARD) || defined(BOARD_COMBINED)
+#include "functions/x68k_keyboard/x68k_keyboard.h"
+#endif
+
 // ---------------------------------------------------------------------------
-// プロトコル定数 (MimicX-protocol v0.5.0)
+// プロトコル定数 (MimicX-protocol v0.6.0)
 // ---------------------------------------------------------------------------
 
 #define PROTOCOL_VERSION_MAJOR  0
-#define PROTOCOL_VERSION_MINOR  5
+#define PROTOCOL_VERSION_MINOR  6
 #define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  6
-#define FW_VERSION_PATCH  1
+#define FW_VERSION_MINOR  7
+#define FW_VERSION_PATCH  0
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15
@@ -45,6 +51,7 @@
 #define CMD_CAPABILITY_REQ 0x03
 #define CMD_CAPABILITY_RSP 0x04
 #define CMD_ACK           0x06
+#define CMD_EMIT_REMOTE   0x07  // ホスト→デバイス: REMOTE 端子から SHARP12 リモコンコード送出
 #define CMD_SET_CONFIG    0x10
 #define CMD_RESET         0x7F
 
@@ -168,6 +175,25 @@ static void process_sysex(const uint8_t* data, int len) {
         uint8_t req_id = (len >= 6) ? data[4] : 0;
         hid_dispatch_release_all();
         send_ack(req_id, ACK_STATUS_OK, cmd);
+        break;
+    }
+    case CMD_EMIT_REMOTE: {
+        // F0 7D 01 07 <req_id> <code> F7
+        if (len < 7) {
+            send_ack((len >= 6) ? data[4] : 0, ACK_STATUS_GENERIC_ERROR, cmd);
+            break;
+        }
+        uint8_t req_id = data[4];
+        uint8_t code = data[5];
+#if defined(BOARD_X68K_KEYBOARD) || defined(BOARD_COMBINED)
+        // 約 100ms ブロックする。USB-MIDI は OS バッファで吸収される想定。
+        int ok = x68k_keyboard_emit_remote(code);
+        send_ack(req_id, ok ? ACK_STATUS_OK : ACK_STATUS_INVALID_VALUE, cmd);
+#else
+        (void)code;
+        // この variant はキーボード未搭載 = REMOTE 端子を持たない
+        send_ack(req_id, ACK_STATUS_UNKNOWN_CMD, cmd);
+#endif
         break;
     }
     default: {
