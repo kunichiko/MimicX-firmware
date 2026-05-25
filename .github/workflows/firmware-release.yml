@@ -132,3 +132,47 @@ jobs:
           generate_release_notes: ${{ steps.notes.outputs.fallback == 'true' }}
           draft: false
           prerelease: false
+
+  deploy-to-pages:
+    # Web フラッシャー (docs/firmware/firmwares/) に bin を同一オリジン配備する。
+    # GitHub Release アセットの直 URL は CORS が効かないため、ブラウザの fetch は
+    # 同じ GitHub Pages ドメイン配下 (kunichiko.github.io/...) からの取得が必須。
+    # release job が Releases を作った後で main に bin を commit/push する。
+    name: Deploy bins to GitHub Pages
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+          pattern: firmware-*
+          merge-multiple: true
+
+      - name: Stage bins under docs/firmware/firmwares/
+        run: |
+          mkdir -p docs/firmware/firmwares
+          cp artifacts/*.bin docs/firmware/firmwares/
+          ls -la docs/firmware/firmwares/
+
+      - name: Commit and push
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/firmware/firmwares/
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "WebUSB フラッシャー: ${TAG} の bin を自動配備 [skip ci]"
+            git push origin main
+          fi

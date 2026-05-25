@@ -261,7 +261,12 @@
 
         const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
 
-        // GitHub Releases API からアセットを集めて VARIANTS に反映する。
+        // GitHub Releases API からバージョン情報とリリースノートを集めて VARIANTS に
+        // 反映する。アセット本体 (.bin) は CORS の都合で API の URL を直接 fetch できない
+        // (release-assets.githubusercontent.com への redirect 先が CORS ヘッダを返さない)
+        // ため、firmware-release.yml の deploy-to-pages ジョブが main の
+        // docs/firmware/firmwares/ に同じ bin を commit している。Web フラッシャーは
+        // そこから同一オリジンで fetch する。
         // アセット名規約: mimicx_<variant>_v<version>.bin (例: mimicx_joystick_v0.7.0.bin)
         async function initVariants() {
             const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
@@ -280,7 +285,8 @@
                     VARIANTS[variant].push({
                         version: tag,
                         date,
-                        url: a.browser_download_url,
+                        // 同一オリジン (GitHub Pages) からの fetch なので CORS 不要
+                        url: `firmwares/${a.name}`,
                         note,
                     });
                 }
