@@ -143,6 +143,21 @@
             margin-bottom: 12px;
             line-height: 1.5;
         }
+        .release-note {
+            font-size: 13px;
+            color: #b8c5d1;
+            background: #0f3460;
+            border-left: 3px solid #00d2ff;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin: 4px 0 8px 0;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .release-note:empty {
+            display: none;
+        }
         a {
             color: #00d2ff;
         }
@@ -199,6 +214,7 @@
         <select id="firmware-select" disabled>
             <option value="" disabled selected>-- 先にバリアントを選択してください --</option>
         </select>
+        <div class="release-note" id="firmware-note"></div>
         <div class="version-info" id="firmware-size"></div>
 
         <div id="file-section" class="file-section" style="display:none;">
@@ -221,39 +237,55 @@
     <script type="module">
         import { CH32Flasher } from './ch32flasher.js';
 
-        // バリアント定義: 各バリアントのリリース一覧 (新しい順)
-        const VARIANTS = {
+        // バリアントの説明文だけハードコード (基板そのものの説明であり release-independent)。
+        // バージョン一覧は GitHub Releases API から取得 (initVariants 参照)。
+        const VARIANT_META = {
             joystick: {
                 desc: 'ATARI 仕様 / メガドライブ 6 ボタンファイティングパッドを模倣する基板向け (CH32X035G8U6 / atari-joystick 基板)。',
-                releases: [
-                    { version: 'v0.7.0', date: '2026-05-24', file: 'firmwares/mimicx_joystick_v0.7.0.bin', note: 'プロトコル 0.6 (EMIT_REMOTE 0x07 追加) に追従。joystick 機能自体は同じ' },
-                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_joystick_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
-                    { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_joystick_v0.6.0.bin', note: 'リブルラブル (XPD-1LR) 対応 / プロトコル 0.5 (req_id + ACK)' },
-                    { version: 'v0.5.1', date: '2026-05-06', file: 'firmwares/mimicx_joystick_v0.5.1.bin', note: 'D 線ピン配置更新 (D1=PA5, D2=PA3, D3=PA2, D5=PA4)' },
-                    { version: 'v0.5.0', date: '2026-05-06', file: 'firmwares/mimicx_joystick_v0.5.0.bin', note: 'CH32X035G8U6 対応 + atari-joystick 基板のピン配置に同期' },
-                    { version: 'v0.4.0', date: '2026-05-05', file: 'firmwares/mimicx_joystick_v0.4.0.bin', note: '初回リリース (CH32X035C8T6)' },
-                ],
             },
             x68k_keyboard: {
                 desc: 'X68000 キーボード基板向け (CH32X035G8U6 / QFN28)。本体側へキーボード信号 (USART1: PB10/PB11, READY: PB12) + マウスポート通信 (USART4 PB9 = MSDATA) を出す。',
-                releases: [
-                    { version: 'v0.7.0', date: '2026-05-24', file: 'firmwares/mimicx_x68k_keyboard_v0.7.0.bin', note: 'TV リモコン (REMOTE 端子) 対応: PB8 から SHARP12 信号送出、EMIT_REMOTE SysEx で発射、本体発 0x00-0x3F も自動転送。KEY_EN によるキー送信抑止に対応' },
-                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_x68k_keyboard_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
-                    { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_x68k_keyboard_v0.6.0.bin', note: 'プロトコル 0.5 (req_id + ACK)' },
-                    { version: 'v0.5.2', date: '2026-05-09', file: 'firmwares/mimicx_x68k_keyboard_v0.5.2.bin', note: 'CH32X035G8U6 対応 (USART1=PB10/PB11, READY=PB12, USART4_TX=PB9)' },
-                    { version: 'v0.4.0', date: '2026-05-05', file: 'firmwares/mimicx_x68k_keyboard_v0.4.0.bin', note: '旧 C8T6 試作配線専用 (USART2=PA15/PA16, READY=PA17, USART3 PA18) — 新基板では選択しないこと' },
-                ],
             },
             combined: {
                 desc: '全機能 (ジョイスティック + X68000 キーボード + マウス) を 1 個の CH32X035G8U6 に同居させたバリアント。joystick / x68k_keyboard 各基板の GPIO がそのまま使える配線で 1 個の MCU を共有する開発・実験向け。MIDI ch は joystick=0 / keyboard=1 / mouse=2。',
-                releases: [
-                    { version: 'v0.7.0', date: '2026-05-24', file: 'firmwares/mimicx_combined_v0.7.0.bin', note: 'TV リモコン (REMOTE 端子) 対応: PB8 から SHARP12 信号送出、EMIT_REMOTE SysEx で発射、本体発 0x00-0x3F も自動転送。KEY_EN によるキー送信抑止に対応' },
-                    { version: 'v0.6.1', date: '2026-05-21', file: 'firmwares/mimicx_combined_v0.6.1.bin', note: 'USB 再接続時の取りこぼしを修正 (SUSPEND 検知で peripheral 再初期化)' },
-                    { version: 'v0.6.0', date: '2026-05-20', file: 'firmwares/mimicx_combined_v0.6.0.bin', note: 'リブルラブル (XPD-1LR) 対応 / プロトコル 0.5 (req_id + ACK) 対応' },
-                    { version: 'v0.5.2', date: '2026-05-10', file: 'firmwares/mimicx_combined_v0.5.2.bin', note: '初回リリース (joystick + x68k_keyboard + x68k_mouse 全部入り)' },
-                ],
             },
         };
+
+        // バリアント別のリリース一覧 (asset URL 含む)。initVariants() でセットする。
+        // 形: { [variant]: [{ version, date, url, note }, ...] }  (新しい順)
+        const VARIANTS = {
+            joystick: [],
+            x68k_keyboard: [],
+            combined: [],
+        };
+
+        const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
+
+        // GitHub Releases API からアセットを集めて VARIANTS に反映する。
+        // アセット名規約: mimicx_<variant>_v<version>.bin (例: mimicx_joystick_v0.7.0.bin)
+        async function initVariants() {
+            const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+            if (!res.ok) throw new Error(`Releases API HTTP ${res.status}`);
+            const releases = await res.json();
+            // release は published_at が新しい順で来るのでそのまま使う
+            for (const rel of releases) {
+                const tag = rel.tag_name;
+                const date = (rel.published_at || '').slice(0, 10);
+                const note = (rel.body || '').trim();
+                for (const a of rel.assets || []) {
+                    const m = /^mimicx_(joystick|x68k_keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
+                    if (!m) continue;
+                    const variant = m[1];
+                    if (!VARIANTS[variant]) continue;
+                    VARIANTS[variant].push({
+                        version: tag,
+                        date,
+                        url: a.browser_download_url,
+                        note,
+                    });
+                }
+            }
+        }
 
         const flasher = new CH32Flasher();
         let firmwareData = null;
@@ -267,6 +299,7 @@
         const fileInput = document.getElementById('firmware-file');
         const fileSection = document.getElementById('file-section');
         const firmwareSize = document.getElementById('firmware-size');
+        const firmwareNote = document.getElementById('firmware-note');
         const chipInfo = document.getElementById('chip-info');
         const chipName = document.getElementById('chip-name');
         const bootloaderVer = document.getElementById('bootloader-ver');
@@ -285,8 +318,8 @@
 
         function populateFirmwareList(variantKey) {
             firmwareSelect.innerHTML = '';
-            const variant = VARIANTS[variantKey];
-            if (!variant) {
+            const releases = VARIANTS[variantKey];
+            if (!releases) {
                 firmwareSelect.disabled = true;
                 return;
             }
@@ -297,10 +330,11 @@
             placeholder.textContent = '-- バージョンを選択 --';
             firmwareSelect.appendChild(placeholder);
 
-            for (const r of variant.releases) {
+            for (const r of releases) {
                 const opt = document.createElement('option');
-                opt.value = r.file;
-                opt.textContent = `${r.version} (${r.date})${r.note ? ' - ' + r.note : ''}`;
+                opt.value = r.url;
+                opt.dataset.note = r.note || '';
+                opt.textContent = `${r.version} (${r.date})`;
                 firmwareSelect.appendChild(opt);
             }
 
@@ -315,10 +349,11 @@
         variantSelect.addEventListener('change', () => {
             const v = variantSelect.value;
             if (!v) return;
-            variantDesc.textContent = VARIANTS[v].desc;
+            variantDesc.textContent = VARIANT_META[v].desc;
             populateFirmwareList(v);
             firmwareData = null;
             firmwareSize.textContent = '';
+            firmwareNote.textContent = '';
             fileSection.style.display = 'none';
             fileInput.value = '';
             updateFlashButton();
@@ -348,12 +383,15 @@
 
         firmwareSelect.addEventListener('change', async () => {
             const url = firmwareSelect.value;
+            const selected = firmwareSelect.options[firmwareSelect.selectedIndex];
+            firmwareNote.textContent = (selected && selected.dataset.note) || '';
             if (!url) return;
 
             if (url === '__local__') {
                 fileSection.style.display = 'block';
                 firmwareData = null;
                 firmwareSize.textContent = '';
+                firmwareNote.textContent = '';
                 updateFlashButton();
                 setStatus('ローカルの .bin ファイルを選択してください', 'info');
                 return;
@@ -378,6 +416,17 @@
                 updateFlashButton();
             }
         });
+
+        // ページ load 時に Releases API を fetch
+        (async () => {
+            try {
+                setStatus('リリース一覧を取得中...');
+                await initVariants();
+                setStatus('デバイスを接続してください');
+            } catch (e) {
+                setStatus(`リリース一覧の取得に失敗: ${e.message}`, 'error');
+            }
+        })();
 
         fileInput.addEventListener('change', (e) => {
             const file = e.target.files[0];

@@ -87,6 +87,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        # 注釈付きタグのメッセージを git tag -l --format='%(contents)' で読むため
+        # フル履歴 + タグを取得する。shallow clone だと annotation が取れない場合がある。
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Download all firmware artifacts
         uses: actions/download-artifact@v6
@@ -98,10 +103,32 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
+      - name: Extract tag annotation as release body
+        id: notes
+        # 注釈付きタグ (git tag -a -m "...") のメッセージをそのまま release body に流す。
+        # Web フラッシャーは Releases API からこの body を読んでバージョン説明として表示する。
+        # 軽量タグ or 注釈が空の場合は generate_release_notes にフォールバック。
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          MSG=$(git tag -l --format='%(contents)' "$TAG")
+          # 末尾の余分な改行を削る
+          MSG=$(printf '%s' "$MSG" | sed -e :a -e '/^$/{$d;N;ba' -e '}')
+          if [ -z "$MSG" ]; then
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "fallback=false" >> "$GITHUB_OUTPUT"
+            {
+              echo 'body<<EOF_TAG_MSG'
+              echo "$MSG"
+              echo 'EOF_TAG_MSG'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*.bin
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: ${{ steps.notes.outputs.fallback == 'true' }}
           draft: false
           prerelease: false
