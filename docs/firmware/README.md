@@ -35,9 +35,39 @@ CH32X035 のファームウェアを Web ブラウザから書き込むための
 
 ## 新しいファームウェアを追加する手順
 
-1. `pio run -e <env>` で `.pio/build/<env>/firmware.bin` を生成する
-2. `docs/firmware/firmwares/mimicx_<env>_v<X.Y.Z>.bin` としてコピーする
-3. `docs/firmware/index.html` の `VARIANTS` テーブルに新しいリリースエントリを追加する
+タグ push で GitHub Actions が以下をすべて自動で行うので、手動コピー /
+`index.html` の編集は不要:
+
+1. 3 env (`joystick` / `x68k_keyboard` / `combined`) を PlatformIO でビルド
+2. `vX.Y.Z` の GitHub Release を作成し、3 つの `mimicx_<env>_v<X.Y.Z>.bin` を
+   アセットとして添付。注釈付きタグ (`git tag -a -m "..."`) のメッセージが
+   Release の body にそのまま流れる
+3. 同じ bin を `docs/firmware/firmwares/` 配下に commit/push し、GitHub Pages
+   に同一オリジン配備 (Web フラッシャーから CORS 制約なしで fetch できる)
+
+リリース手順:
+
+```sh
+git checkout main && git pull
+
+# 注釈付きタグ (-a -m) のメッセージが Release body + Web フラッシャーの
+# 「リリースノート」ボックスにそのまま表示される。Markdown / 改行 OK。
+git tag -a v0.8.0 -m "v0.8.0: タイトル
+
+詳細な変更内容:
+- 箇条書きはそのまま転記される
+- 改行も保持される"
+
+git push origin v0.8.0
+```
+
+Web フラッシャーのバージョン一覧 (`index.html`) はページ load 時に
+GitHub Releases API を叩いて動的生成しているので、新しいタグを push すれば
+特別な作業なしで反映される (GitHub Pages の再デプロイ完了後)。
+
+軽量タグ (`-a -m` なし) を push した場合は `generate_release_notes: true` に
+フォールバックして自動生成された Release body が使われる。Web フラッシャー
+からも見えるので、正式リリースは注釈付きタグで打つこと推奨。
 
 ## 技術情報
 

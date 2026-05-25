@@ -73,6 +73,40 @@ pio run -e joystick -t clean   # env 単位
 rm -rf .pio                    # 完全クリア (プラットフォーム再取得)
 ```
 
+## リリース手順
+
+タグ push (`v*.*.*`) を起点に GitHub Actions の `Firmware Release` ワークフロー
+(`.github/workflows/firmware-release.yml`) が以下を自動実行する:
+
+| ジョブ | 役割 |
+|---|---|
+| `Build firmware` | matrix で 3 env (`joystick` / `x68k_keyboard` / `combined`) を並列ビルド。`mimicx_<env>_v<X.Y.Z>.bin` を artifact 出力 |
+| `Create GitHub Release` | `vX.Y.Z` の GitHub Release を作成し 3 つの bin を添付。注釈付きタグ (`git tag -a -m "..."`) のメッセージをそのまま Release body として使う (注釈なしなら自動生成にフォールバック) |
+| `Deploy bins to GitHub Pages` | 同じ 3 つの bin を `docs/firmware/firmwares/` に commit/push。Web フラッシャー (GitHub Pages) から同一オリジンで fetch できるようにする |
+
+実際のリリース作業:
+
+```sh
+git checkout main && git pull
+
+# 必要なら src/main.c の FW_VERSION_* (MAJOR / MINOR / PATCH) も更新して commit
+# (Web フラッシャーには現れないが、ホスト app の IDENTIFY 応答で表示される値)
+
+# 注釈付きタグを打つ。-m のメッセージが Release body と Web フラッシャーの
+# 「リリースノート」ボックスにそのまま表示される (Markdown / 改行 OK)
+git tag -a v0.8.0 -m "v0.8.0: タイトル
+
+変更内容を Markdown で記述する。
+- 箇条書きはそのまま転記される"
+
+git push origin v0.8.0
+```
+
+Web フラッシャー (`docs/firmware/`) は GitHub Releases API で版とノートを動的取得
+するので、新タグを push すれば手動編集なしで反映される (GitHub Pages の再デプロイ
+完了後)。pull request / `workflow_dispatch` ではビルド検証のみで Release は作成
+されない (上記 2 ジョブ目以降がスキップされる)。
+
 ## 関連リポジトリ
 
 - [MimicX-protocol](https://github.com/kunichiko/MimicX-protocol) - MIDI通信プロトコルライブラリ
