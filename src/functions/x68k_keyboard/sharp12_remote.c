@@ -72,11 +72,12 @@ static void send_one_frame(uint16_t data12) {
 }
 
 void sharp12_remote_emit(uint8_t code) {
-    // SHARP12 のデータ部 12 bit のレイアウト (LSB first):
-    //   [3 bit expansion = 000] [8 bit command] [1 bit padding = 0]
-    // 反転側は全 12 bit をビット反転する。
+    // SHARP12 のデータ部 12 bit のレイアウト (LSB first 送出):
+    //   表信号: [000] [CODE 5bit] [0000]
+    //   裏信号: [000] [INV  5bit] [1111]
+    // 先頭の expansion 3bit は固定 000 で、反転対象は CODE 5bit + 末尾 4bit。
     uint16_t frame   = (uint16_t)((uint16_t)code << 3) & 0x0FFF;
-    uint16_t inv     = (uint16_t)((~frame) & 0x0FFF);
+    uint16_t inv     = (uint16_t)((~frame) & 0x0FF8);
 
     send_one_frame(frame);
     send_one_frame(inv);
