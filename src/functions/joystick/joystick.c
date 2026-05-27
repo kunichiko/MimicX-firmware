@@ -104,6 +104,96 @@ static volatile uint32_t md6_lut_rising[4];
 #define D_PINS_MASK ((1<<PIN_D0)|(1<<PIN_D1)|(1<<PIN_D2)|(1<<PIN_D3)|(1<<PIN_D4)|(1<<PIN_D5))
 
 // ---------------------------------------------------------------------------
+// MSX マウス: pin 8 (STROBE) のエッジで 4 ニブル (X 上位 / X 下位 / Y 上位 / Y 下位)
+// を順次 D0-D3 (pin 1-4) に出力する。pin 6 (D4) = 左ボタン, pin 7 (D5) = 右ボタン
+// は静的に駆動 (常時アクティブ-Low)。3ms 以上 STROBE がトグルしなければアイドル
+// と見なし、累積デルタを 0 クリアして次サイクルに備える。
+// ---------------------------------------------------------------------------
+//
+// プロトコル (msx.org wiki + コミュニティ実装からの整理):
+//   - byte 1 = X delta (8bit signed)、byte 2 = Y delta (8bit signed)
+//   - 各 byte を 2 ニブルに分けて MSB ニブルから出力
+//   - 順序: X 上位 → X 下位 → Y 上位 → Y 下位
+//   - 配線は joystick と同じ active-low (bit=1 → pin LOW, bit=0 → pin Hi-Z)
+//
+// DMA モデル:
+//   rising_lut[2]  = { X 上位, Y 上位 }   (TH rising edge で順次出力)
+//   falling_lut[2] = { X 下位, Y 下位 }   (TH falling edge で順次出力)
+// → 4 エッジで 1 サイクル完結。アイドル後は両 DMA ポインタが先頭に戻る。
+// ---------------------------------------------------------------------------
+
+// 累積デルタ (CC 受信時に更新、サイクル完了時に 0 クリア)。
+// MSX 側がいま読んでいる現在値を直接保持する形にした。CC が来たら on_cc で
+// 即時加算し LUT もすぐ書き換える。サイクル完了で 0 クリアすることで連続
+// ポーリングでもドリフトしない。
+static volatile int8_t  msx_dx_acc = 0;
+static volatile int8_t  msx_dy_acc = 0;
+// 1 MSX 読み取りサイクル = 4 byte (= 8 nibble = 4 H + 4 L) で 4 fallings を含む。
+// 旧 Original protocol では mouse は byte 3/4 を要求されたら byte 1/2 を繰り返し
+// 返す挙動が標準。MSX View は 8 nibble 読みでこの繰り返しを期待していると思われる
+// ため、サイクル末 (4 falling 目) で初めて acc を 0 リセットして次サイクルへ。
+// 2 falling 目で mid-cycle にリセットすると byte 3/4 = 0 になり、MSX View 側で
+// byte 1/2 と byte 3/4 の不一致から異常動作 (右下ドリフト) する。
+// falling のみを数える理由は、初期 strobe 状態 (HIGH/LOW) に依存しないため。
+static volatile uint8_t msx_falling_count = 0;
+// ボタン状態 (1 = 押下, 0 = リリース)。
+static volatile uint8_t msx_btn_left  = 0;
+static volatile uint8_t msx_btn_right = 0;
+
+// LUT (BSHR format、上位 16bit = LOW にするピン / 下位 16bit = Hi-Z にするピン)。
+// D4/D5 (ボタン) のビットは含めず、D0-D3 (ニブル) だけ書き換える。これによって
+// DMA がニブルを更新してもボタンピンは静的状態を維持する。
+static volatile uint32_t msx_lut_rising[2];
+static volatile uint32_t msx_lut_falling[2];
+
+// 4bit ニブルを D0-D3 (PA7/PA5/PA3/PA2) の BSHR 値にパックする。
+// active-low: bit=1 → 該当ピンを LOW (BCR 側)、bit=0 → Hi-Z (BSR 側)。
+static uint32_t msx_pack_nibble(uint8_t nibble) {
+    static const uint8_t pins[4] = { PIN_D0, PIN_D1, PIN_D2, PIN_D3 };
+    uint32_t set = 0, reset = 0;
+    for (int b = 0; b < 4; b++) {
+        uint32_t bit = 1u << pins[b];
+        if (nibble & (1 << b)) reset |= bit;  // active (LOW)
+        else                   set   |= bit;  // inactive (Hi-Z)
+    }
+    return set | (reset << 16);
+}
+
+// 累積デルタから LUT を再構築。CC 受信時 / アイドル 0 クリア時 / モード切替時に呼ぶ。
+//
+// 重要: MSX BIOS は読み取り生バイトを 2 の補数で 否定 (NEG) してデルタを返す。
+//   PAD(13) = -byte_raw_signed
+// 「マウス未接続」状態は D0-D3 が全 HIGH (pull-up) → BIOS reads 0xFF (= -1) →
+// NEG = +1 と読まれてしまい、毎サイクル +1 ずつ右下にドリフトする。
+//
+// real mouse は「動きなし = byte 0x00」を返す = 全 D 端子 LOW である必要がある。
+// 我々の pack_nibble は active-low (bit=1 → pin LOW) なので、BIOS が読む生バイト
+// は encode 値の bitwise NOT になる。よって BIOS が見るバイト = ~V、NEG 後の
+// PAD = V + 1 となる。PAD = acc にしたければ V = acc - 1 を encode する。
+//
+//   acc =  0 → V = -1 = 0xFF → 全 D LOW → BIOS reads 0x00 → NEG = 0 (no drift)
+//   acc = +5 → V = +4 = 0x04 → BIOS reads 0xFB → NEG = +5
+//   acc = -3 → V = -4 = 0xFC → BIOS reads 0x03 → NEG = -3
+static void msx_rebuild_lut(void) {
+    // (int) 経由で減算してオーバーフロー UB を避け、最後に 8bit に切り詰める。
+    uint8_t x = (uint8_t)((int)msx_dx_acc - 1);
+    uint8_t y = (uint8_t)((int)msx_dy_acc - 1);
+    msx_lut_rising[0]  = msx_pack_nibble((x >> 4) & 0x0F);  // X 上位
+    msx_lut_falling[0] = msx_pack_nibble(x & 0x0F);          // X 下位
+    msx_lut_rising[1]  = msx_pack_nibble((y >> 4) & 0x0F);  // Y 上位
+    msx_lut_falling[1] = msx_pack_nibble(y & 0x0F);          // Y 下位
+}
+
+// 左右ボタンを D4/D5 ピンに反映する (active-low、押下中は LOW)。
+// MSX マウスモード時のみ呼び出す。
+static void msx_update_button_pins(void) {
+    if (msx_btn_left)  GPIOA->BCR  = (1 << PIN_D4);  // LOW
+    else               GPIOA->BSHR = (1 << PIN_D4);  // Hi-Z
+    if (msx_btn_right) GPIOA->BCR  = (1 << PIN_D5);
+    else               GPIOA->BSHR = (1 << PIN_D5);
+}
+
+// ---------------------------------------------------------------------------
 // リブルラブル XPD-1LR: 左右レバーを TH で時分割多重
 // ---------------------------------------------------------------------------
 // 純正 XPD-1LR は pin 8 (TH/COMMON) をそのまま左レバーの COMMON に、
@@ -289,8 +379,30 @@ static void md6_watchdog_setup(void) {
 // TIM2_IRQHandler は Update 専用
 void TIM2_CC_IRQHandler(void) __attribute__((interrupt));
 void TIM2_CC_IRQHandler(void) {
-    // CC1IF + CC2IF をクリア (DMA はハードウェアで処理済み)
+    // フラグの読み取りはクリア前に行う必要がある (どちらのエッジが起きたかの判定)。
+    uint32_t intfr = TIM2->INTFR;
     TIM2->INTFR = ~(TIM_CC1IF | TIM_CC2IF);
+    if (pad_mode == PAD_MODE_MSX_MOUSE) {
+        // CC1 = falling edge (CC1P=1 で設定)。
+        // MSX View が観測する 1 サイクル = 8 nibble (4 byte) = 4 falling。
+        // mid-cycle (2 falling 目) で acc を 0 にすると byte 3/4 が 0 になり
+        // MSX View 側で異常動作する (右下ドリフト) ため、4 falling 目 (= 完全
+        // サイクル末) で初めて acc クリアする。DMA は 2 エントリ循環なので
+        // 自然に byte 1/2 のニブルが byte 3/4 でも繰り返し返り、Original
+        // protocol mouse の標準挙動 (byte 3/4 で byte 1/2 を繰り返す) と一致。
+        if (intfr & TIM_CC1IF) {
+            if (++msx_falling_count >= 4) {
+                msx_falling_count = 0;
+                msx_dx_acc = 0;
+                msx_dy_acc = 0;
+                msx_rebuild_lut();
+                // DMA ポインタを先頭に戻す。3 エッジサイクル (初回の SET HIGH
+                // が edge を生まないケース) で rising 側ポインタがずれることが
+                // あるため、毎サイクル末で位置同期する。
+                md6_dma_reset();
+            }
+        }
+    }
     // TIM3 (watchdog) を再スタート
     TIM3->CNT = 0;
     TIM3->CTLR1 |= TIM_CEN;
@@ -300,7 +412,18 @@ void TIM3_IRQHandler(void) __attribute__((interrupt));
 void TIM3_IRQHandler(void) {
     if (TIM3->INTFR & TIM_UIF) {
         TIM3->INTFR = ~TIM_UIF;
-        // 1.8ms アイドル → DMA ポインタを先頭に戻す
+        if (pad_mode == PAD_MODE_MSX_MOUSE) {
+            // 3ms アイドル: MSX 側がサイクル間に入ったとみなす。
+            // 2-falling コミット (TIM2 CC ISR) が何らかの race / 取りこぼしで
+            // acc を 0 にできなかった場合の保険として、ここでも acc を 0 にする。
+            // 通常の MSX サイクル内 inter-strobe は最大 ~200us なのでアイドル
+            // 3ms はサイクル中には発火しない。
+            msx_falling_count = 0;
+            msx_dx_acc = 0;
+            msx_dy_acc = 0;
+            msx_rebuild_lut();
+        }
+        // DMA ポインタを先頭 (X 上位 / X 下位) に戻す。
         md6_dma_reset();
     }
 }
@@ -440,6 +563,24 @@ void joystick_set_mode(uint8_t mode) {
         md6_dma_setup();   // 同じ TIM2 + DMA 機構を使う
         uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
         GPIOA->BSHR = th_high ? lr_lut_rising[0] : lr_lut_falling[0];
+    } else if (mode == PAD_MODE_MSX_MOUSE) {
+        // MSX マウス: 4 ニブル循環 (rising/falling 各 2 エントリ)
+        th_dma_src_falling = msx_lut_falling;
+        th_dma_src_rising  = msx_lut_rising;
+        th_dma_count       = 2;
+        msx_dx_acc = 0;
+        msx_dy_acc = 0;
+        msx_falling_count = 0;
+        msx_btn_left = 0;
+        msx_btn_right = 0;
+        msx_rebuild_lut();
+        msx_update_button_pins();
+        md6_dma_setup();   // TIM2 + DMA + TIM3 watchdog を共有
+        // MSX マウスのアイドルタイムアウトは 3ms (MD6 / LR の 1.8ms から上書き)
+        TIM3->ATRLR = 3000 - 1;
+        // 初期出力: TH の現在状態に応じて X 上位 (rising[0]) または X 下位 (falling[0])
+        uint8_t th_high = (GPIOA->INDR >> PIN_TH) & 1;
+        GPIOA->BSHR = th_high ? msx_lut_rising[0] : msx_lut_falling[0];
     } else {
         // DMA + TIM2 + EXTI 無効化
         md6_dma_disable();
@@ -494,6 +635,15 @@ void joystick_poll(void) {
 #define MIDI_CH_JOYSTICK 0
 #define CONFIG_PAD_MODE  0x03
 
+// MSX マウスモード時の MIDI ノート (joystick ボタン Note 1-18 と衝突しない値)
+#define NOTE_MSX_MOUSE_LEFT   19
+#define NOTE_MSX_MOUSE_RIGHT  20
+
+// MSX マウスモード時の CC (x68k_mouse と同じく value=64 でデルタ 0、
+// 0..127 が -64..+63 のオフセット表現)
+#define CC_MSX_DX  0x30
+#define CC_MSX_DY  0x31
+
 static void joystick_fn_init(void) {
     joystick_init();
     // デフォルトは ATARI モード
@@ -502,15 +652,57 @@ static void joystick_fn_init(void) {
 
 static void joystick_fn_release_all(void) {
     joystick_release_all();
+    if (pad_mode == PAD_MODE_MSX_MOUSE) {
+        msx_btn_left = 0;
+        msx_btn_right = 0;
+        msx_dx_acc = 0;
+        msx_dy_acc = 0;
+        msx_rebuild_lut();
+        msx_update_button_pins();
+    }
 }
 
 static void joystick_fn_on_note_on(uint8_t note, uint8_t velocity) {
     (void)velocity;
+    if (pad_mode == PAD_MODE_MSX_MOUSE) {
+        // MSX マウスモードでは joystick ボタン Note は黙殺し、左右マウスボタンのみ受ける
+        if (note == NOTE_MSX_MOUSE_LEFT)  { msx_btn_left  = 1; msx_update_button_pins(); }
+        else if (note == NOTE_MSX_MOUSE_RIGHT) { msx_btn_right = 1; msx_update_button_pins(); }
+        return;
+    }
     joystick_set_button_by_note(note, 1);
 }
 
 static void joystick_fn_on_note_off(uint8_t note) {
+    if (pad_mode == PAD_MODE_MSX_MOUSE) {
+        if (note == NOTE_MSX_MOUSE_LEFT)  { msx_btn_left  = 0; msx_update_button_pins(); }
+        else if (note == NOTE_MSX_MOUSE_RIGHT) { msx_btn_right = 0; msx_update_button_pins(); }
+        return;
+    }
     joystick_set_button_by_note(note, 0);
+}
+
+static void joystick_fn_on_cc(uint8_t cc, uint8_t value) {
+    // MSX マウスモード時のみ DX/DY を受け付け、累積デルタへ加算する。
+    // value はオフセット表現 (64 = 0、0 = -64、127 = +63)。
+    // acc を即座に更新し LUT も書き換える。サイクル完了時 (TIM2 CC ISR で
+    // 2 falling 検出) に 0 クリアされるため、次サイクル以降ドリフトしない。
+    if (pad_mode != PAD_MODE_MSX_MOUSE) return;
+    int16_t delta = (int16_t)value - 64;
+    if (cc == CC_MSX_DX) {
+        int16_t sum = (int16_t)msx_dx_acc + delta;
+        if (sum > 127)  sum = 127;
+        if (sum < -128) sum = -128;
+        msx_dx_acc = (int8_t)sum;
+    } else if (cc == CC_MSX_DY) {
+        int16_t sum = (int16_t)msx_dy_acc + delta;
+        if (sum > 127)  sum = 127;
+        if (sum < -128) sum = -128;
+        msx_dy_acc = (int8_t)sum;
+    } else {
+        return;
+    }
+    msx_rebuild_lut();
 }
 
 static uint8_t joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int len) {
@@ -519,7 +711,8 @@ static uint8_t joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int le
     uint8_t mode = val[0];
     if (mode != PAD_MODE_ATARI &&
         mode != PAD_MODE_MD6 &&
-        mode != PAD_MODE_LIBBLE_RABBLE) {
+        mode != PAD_MODE_LIBBLE_RABBLE &&
+        mode != PAD_MODE_MSX_MOUSE) {
         return ACK_STATUS_INVALID_VALUE;
     }
     joystick_set_mode(mode);
@@ -549,7 +742,7 @@ const hid_function_t joystick_function = {
     .release_all       = joystick_fn_release_all,
     .on_note_on        = joystick_fn_on_note_on,
     .on_note_off       = joystick_fn_on_note_off,
-    .on_cc             = NULL,
+    .on_cc             = joystick_fn_on_cc,
     .on_set_config     = joystick_fn_on_set_config,
     .poll              = joystick_fn_poll,
     .append_capabilities = joystick_fn_append_capabilities,

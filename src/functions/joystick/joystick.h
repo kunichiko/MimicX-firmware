@@ -7,6 +7,7 @@
 #define PAD_MODE_ATARI          0
 #define PAD_MODE_MD6            1
 #define PAD_MODE_LIBBLE_RABBLE  2  // XPD-1LR 互換 (左右十字キー + 中央 A/B)
+#define PAD_MODE_MSX_MOUSE      3  // MSX マウスプロトコル (pin 8 STROBE で 4 ニブル送出)
 
 // MIDI Note 番号 → ボタンインデックス
 #define BTN_UP      0

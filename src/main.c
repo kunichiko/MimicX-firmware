@@ -38,7 +38,7 @@
 #define PROTOCOL_VERSION_MINOR  6
 #define FW_VERSION_MAJOR  0
 #define FW_VERSION_MINOR  7
-#define FW_VERSION_PATCH  2
+#define FW_VERSION_PATCH  3
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15
