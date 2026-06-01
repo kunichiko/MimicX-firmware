@@ -23,6 +23,7 @@
 #include "usb_midi.h"
 #include "hid_dispatcher.h"
 #include "board_config.h"
+#include "status_led.h"
 
 // EMIT_REMOTE (0x07) は x68k_keyboard を搭載する variant でのみ有効。
 // 該当 variant でない場合は CMD_EMIT_REMOTE は UNKNOWN_COMMAND を返す。
@@ -53,6 +54,7 @@
 #define CMD_ACK           0x06
 #define CMD_EMIT_REMOTE   0x07  // ホスト→デバイス: REMOTE 端子から SHARP12 リモコンコード送出
 #define CMD_SET_CONFIG    0x10
+#define CMD_SET_LED       0x20  // ホスト→デバイス: PB0 のフルカラー LED の色を変更
 #define CMD_RESET         0x7F
 
 // ---------------------------------------------------------------------------
@@ -147,6 +149,8 @@ static void process_sysex(const uint8_t* data, int len) {
     switch (cmd) {
     case CMD_IDENTIFY_REQ:
         // ブートストラップ用途で req_id を持たない (プロトコル 6.3)
+        // ホストアプリと最初の握手が成立したのでステータス LED を緑に切替。
+        status_led_set_rgb(0, 64, 0);
         send_identify_response();
         break;
     case CMD_CAPABILITY_REQ: {
@@ -174,6 +178,24 @@ static void process_sysex(const uint8_t* data, int len) {
         // F0 7D 01 7F <req_id> F7
         uint8_t req_id = (len >= 6) ? data[4] : 0;
         hid_dispatch_release_all();
+        send_ack(req_id, ACK_STATUS_OK, cmd);
+        break;
+    }
+    case CMD_SET_LED: {
+        // F0 7D 01 20 <req_id> <R> <G> <B> F7  (R/G/B は 7bit, 0-127)
+        // 7bit → 8bit スケール: (v<<1) | (v>>6)  (0→0, 127→255 で単調)
+        if (len < 9) {
+            send_ack((len >= 6) ? data[4] : 0, ACK_STATUS_INVALID_VALUE, cmd);
+            break;
+        }
+        uint8_t req_id = data[4];
+        uint8_t r7 = data[5] & 0x7F;
+        uint8_t g7 = data[6] & 0x7F;
+        uint8_t b7 = data[7] & 0x7F;
+        uint8_t r = (uint8_t)((r7 << 1) | (r7 >> 6));
+        uint8_t g = (uint8_t)((g7 << 1) | (g7 >> 6));
+        uint8_t b = (uint8_t)((b7 << 1) | (b7 >> 6));
+        status_led_set_rgb(r, g, b);
         send_ack(req_id, ACK_STATUS_OK, cmd);
         break;
     }
@@ -289,6 +311,9 @@ int main() {
 
     // 初期化
     gpio_init_debug_leds();
+    status_led_init();
+    // 起動時は黄色 (ホストアプリ未接続)。IDENTIFY_REQ 受信で緑に切替わる。
+    status_led_set_rgb(64, 32, 0);
     hid_dispatch_init();
     usb_midi_init();
 

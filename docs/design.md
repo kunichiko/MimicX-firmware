@@ -128,7 +128,9 @@ USB-MIDI の SysEx (System Exclusive) メッセージを利用して、HID 制�
 | Pin 19 (PA3) | GPIO OUT | ATARI ジョイスティック: 右 |
 | Pin 2 (PA4) | GPIO OUT | ATARI ジョイスティック: ボタン 1 |
 | Pin 3 (PA5) | GPIO OUT | ATARI ジョイスティック: ボタン 2 |
+| Pin 15 (PB0) | GPIO OUT | ステータス LED (WS2812B-2020, 470Ω 直列, VDD33 駆動) |
 
+※ ステータス LED は起動時に黄色、IDENTIFY_REQ 受信で緑に切替わる。SysEx 0x20 (CMD_SET_LED) で任意色に変更可能。
 ※ PC1 は SWDIO と共有。デバッグ時は UART を切り離す必要あり。
 ※ アダプタの種類（ジョイスティック / キーボード）ごとに基板を分けるため、
   全ピンを同時に使用する必要はない。
