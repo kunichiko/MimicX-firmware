@@ -36,10 +36,10 @@
 // ---------------------------------------------------------------------------
 
 #define PROTOCOL_VERSION_MAJOR  0
-#define PROTOCOL_VERSION_MINOR  6
+#define PROTOCOL_VERSION_MINOR  7  // 0.7: serial / SET_LED / SET_LED_BLINK / HEART_BEAT を追加
 #define FW_VERSION_MAJOR  0
 #define FW_VERSION_MINOR  7
-#define FW_VERSION_PATCH  3
+#define FW_VERSION_PATCH  5
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15
@@ -53,8 +53,11 @@
 #define CMD_CAPABILITY_RSP 0x04
 #define CMD_ACK           0x06
 #define CMD_EMIT_REMOTE   0x07  // ホスト→デバイス: REMOTE 端子から SHARP12 リモコンコード送出
+#define CMD_HEART_BEAT    0x08  // ホスト→デバイス: 接続生存通知 (1秒間隔送信)。応答は ACK。
+#define CMD_DISCONNECT    0x09  // ホスト→デバイス: 選択終了。即座に SCANNED に戻る。
 #define CMD_SET_CONFIG    0x10
-#define CMD_SET_LED       0x20  // ホスト→デバイス: PB0 のフルカラー LED の色を変更
+#define CMD_SET_LED       0x20  // ホスト→デバイス: PB0 LED の色 override (RGB=255,255,255 で reset)
+#define CMD_SET_LED_BLINK 0x21  // ホスト→デバイス: PB0 LED の点滅速度 override (None/Slow/Mid/High)
 #define CMD_RESET         0x7F
 
 // ---------------------------------------------------------------------------
@@ -104,6 +107,21 @@ static void send_identify_response(void) {
     rsp[i++] = FW_VERSION_PATCH;
     // チャンネルマップ: <num_channels> <ch_0> <type_0> <target_0> ...
     i += hid_dispatch_build_channel_map(rsp + i, sizeof(rsp) - i - 1);
+    // Chip UID (64bit) を 16 文字 ASCII hex (uppercase) で埋め込む。
+    // バイト順は ESIG 上のメモリ並び (= wchisp の表示と一致)。
+    // 例: UID0=0x2CD8ABCD, UID1=0x95CCBD27 → "CDABD82C27BDCC95"
+    {
+        static const char hex[] = "0123456789ABCDEF";
+        uint32_t uid[2] = { ESIG->UID0, ESIG->UID1 };
+        for (int w = 0; w < 2; w++) {
+            uint32_t v = uid[w];
+            for (int b = 0; b < 4; b++) {  // little-endian: LSB が先頭バイト
+                uint8_t byte = (v >> (b * 8)) & 0xFFu;
+                rsp[i++] = hex[byte >> 4];
+                rsp[i++] = hex[byte & 0xF];
+            }
+        }
+    }
     // ボード名 (BOARD_NAME)
     static const char board_name[] = BOARD_NAME;
     for (int j = 0; board_name[j] && i < (int)sizeof(rsp) - 1; j++) {
@@ -148,11 +166,27 @@ static void process_sysex(const uint8_t* data, int len) {
     uint8_t cmd = data[3];
     switch (cmd) {
     case CMD_IDENTIFY_REQ:
-        // ブートストラップ用途で req_id を持たない (プロトコル 6.3)
-        // ホストアプリと最初の握手が成立したのでステータス LED を緑に切替。
-        status_led_set_rgb(0, 64, 0);
+        // ブートストラップ用途で req_id を持たない (プロトコル 6.3)。
+        // 状態を SCANNED に遷移し (黄→緑)、応答を返す。
+        status_led_on_identify_request();
         send_identify_response();
         break;
+    case CMD_HEART_BEAT: {
+        // F0 7D 01 08 <req_id> F7
+        // 状態を CONNECTED に遷移 (まだなら) し HB タイマーをリセット、ACK を返す。
+        uint8_t req_id = (len >= 6) ? data[4] : 0;
+        status_led_on_heart_beat();
+        send_ack(req_id, ACK_STATUS_OK, cmd);
+        break;
+    }
+    case CMD_DISCONNECT: {
+        // F0 7D 01 09 <req_id> F7
+        // アプリがデバイス選択を解除した宣言。override をクリアして SCANNED に戻る。
+        uint8_t req_id = (len >= 6) ? data[4] : 0;
+        status_led_on_disconnect_request();
+        send_ack(req_id, ACK_STATUS_OK, cmd);
+        break;
+    }
     case CMD_CAPABILITY_REQ: {
         // F0 7D 01 03 <req_id> F7
         uint8_t req_id = (len >= 6) ? data[4] : 0;
@@ -184,6 +218,7 @@ static void process_sysex(const uint8_t* data, int len) {
     case CMD_SET_LED: {
         // F0 7D 01 20 <req_id> <R> <G> <B> F7  (R/G/B は 7bit, 0-127)
         // 7bit → 8bit スケール: (v<<1) | (v>>6)  (0→0, 127→255 で単調)
+        // スケール後 RGB=(255,255,255) は「override reset」のセンチネル。
         if (len < 9) {
             send_ack((len >= 6) ? data[4] : 0, ACK_STATUS_INVALID_VALUE, cmd);
             break;
@@ -195,7 +230,24 @@ static void process_sysex(const uint8_t* data, int len) {
         uint8_t r = (uint8_t)((r7 << 1) | (r7 >> 6));
         uint8_t g = (uint8_t)((g7 << 1) | (g7 >> 6));
         uint8_t b = (uint8_t)((b7 << 1) | (b7 >> 6));
-        status_led_set_rgb(r, g, b);
+        // 255/255/255 は status_led_set_override_rgb 内部で reset 扱い
+        status_led_set_override_rgb(r, g, b);
+        send_ack(req_id, ACK_STATUS_OK, cmd);
+        break;
+    }
+    case CMD_SET_LED_BLINK: {
+        // F0 7D 01 21 <req_id> <speed> F7   (speed: 0=None / 1=Slow / 2=Mid / 3=High)
+        if (len < 7) {
+            send_ack((len >= 6) ? data[4] : 0, ACK_STATUS_INVALID_VALUE, cmd);
+            break;
+        }
+        uint8_t req_id = data[4];
+        uint8_t speed = data[5] & 0x7F;
+        if (speed > LED_BLINK_HIGH) {
+            send_ack(req_id, ACK_STATUS_INVALID_VALUE, cmd);
+            break;
+        }
+        status_led_set_override_blink(speed);
         send_ack(req_id, ACK_STATUS_OK, cmd);
         break;
     }
@@ -278,6 +330,7 @@ static void process_midi_event(uint8_t cin, uint8_t midi0, uint8_t midi1, uint8_
             debug_led_set(midi1, 1);
         } else {
             hid_dispatch_note_on(channel, midi1, midi2);
+            status_led_on_input_activity();
         }
         break;
 
@@ -286,11 +339,13 @@ static void process_midi_event(uint8_t cin, uint8_t midi0, uint8_t midi1, uint8_
             debug_led_set(midi1, 0);
         } else {
             hid_dispatch_note_off(channel, midi1);
+            status_led_on_input_activity();
         }
         break;
 
     case CIN_CONTROL_CHANGE:
         hid_dispatch_cc(channel, midi1, midi2);
+        status_led_on_input_activity();
         break;
 
     default:
@@ -311,9 +366,7 @@ int main() {
 
     // 初期化
     gpio_init_debug_leds();
-    status_led_init();
-    // 起動時は黄色 (ホストアプリ未接続)。IDENTIFY_REQ 受信で緑に切替わる。
-    status_led_set_rgb(64, 32, 0);
+    status_led_init();   // 内部で WAITING (黄) を render する
     hid_dispatch_init();
     usb_midi_init();
 
@@ -327,6 +380,9 @@ int main() {
 
         // 各 HID 機能の poll
         hid_dispatch_poll();
+
+        // ステータス LED の点滅 toggle
+        status_led_poll();
 
         // USB-MIDI TX バッファをフラッシュ
         usb_midi_poll();
