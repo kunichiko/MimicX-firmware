@@ -1,24 +1,24 @@
 # Mimic X Firmware Update
 
-CH32X035 のファームウェアを Web ブラウザから書き込むためのページです。
+Mimic X アダプタ (CH32X035 搭載) のファームウェアを Web ブラウザから書き込むためのページです。
 
 公開 URL: <https://kunichiko.github.io/MimicX-firmware/firmware/>
 
 ## 使い方
 
 1. Chromium 系ブラウザ（Chrome, Edge）で [ファームウェア更新ページ](https://kunichiko.github.io/MimicX-firmware/firmware/) を**先に**開いておく
-2. CH32X035 の BOOT ボタンを押しながら USB ケーブルを接続する
-3. **すぐに**「デバイスに接続」を押し、「QinHeng Electronics 製のデバイス」を選択する
+2. Mimic X アダプタの BOOT ボタンを押しながら USB ケーブルを接続する
+3. **すぐに**「アダプタに接続」を押し、ブラウザのダイアログで「QinHeng Electronics 製のデバイス」を選択する
 4. 基板に合うバリアント（joystick / x68k_keyboard / combined）とファームウェアバージョンを選択して「書き込み」を押す
 5. 書き込み完了後、USB ケーブルを抜き差しして通常モードで起動する
 
 > **BOOT モードの 5 秒タイムアウトについて**
 >
-> CH32X035 内蔵の USB DFU ブートローダーは、ホストから ISP コマンドを受信しないまま約 5 秒経過すると自動的に通常起動へ抜ける仕様です。ブラウザのページを開く前に USB を挿してしまうと、「デバイスに接続」を押す頃には既に通常モードに移行していてデバイスが見つかりません。必ず先にページを開き、USB 接続直後に「デバイスに接続」を押してください。間に合わなかった場合は USB を一度抜き、BOOT ボタンを押しながら挿し直してリトライしてください（CH32X035G8U6 には RESET 端子が出ていないため、RESET ボタンによる復帰はできません）。
+> CH32X035 内蔵の USB DFU ブートローダーは、ホストから ISP コマンドを受信しないまま約 5 秒経過すると自動的に通常起動へ抜ける仕様です。ブラウザのページを開く前に USB を挿してしまうと、「アダプタに接続」を押す頃には既に通常モードに移行していてアダプタが見つかりません。必ず先にページを開き、USB 接続直後に「アダプタに接続」を押してください。間に合わなかった場合は USB を一度抜き、BOOT ボタンを押しながら挿し直してリトライしてください（CH32X035G8U6 には RESET 端子が出ていないため、RESET ボタンによる復帰はできません）。
 
 > **Windows をお使いの方へ**
 >
-> CH32X035 を BOOT モードで Chrome / Edge に認識させるには、事前に **WinUSB ドライバ**を手動でインストールしておく必要があります。手順は [WinUSB ドライバのインストール手順](https://kunichiko.ohnaka.jp/products/mimicx/install-winusb) を参照してください。macOS / Linux / ChromeOS / Android では追加のドライバインストールは不要です。
+> Mimic X アダプタを BOOT モードで Chrome / Edge に認識させるには、事前に **WinUSB ドライバ**を手動でインストールしておく必要があります。手順は [WinUSB ドライバのインストール手順](https://kunichiko.ohnaka.jp/products/mimicx/install-winusb) を参照してください。macOS / Linux / ChromeOS / Android では追加のドライバインストールは不要です。
 
 ## バリアント
 

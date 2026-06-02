@@ -167,16 +167,16 @@
     <h1>Mimic X Firmware Update</h1>
 
     <p>
-        Mimic X (CH32X035) のファームウェアを Web ブラウザから書き込むページです。
+        Mimic X アダプタ (CH32X035 搭載) のファームウェアを Web ブラウザから書き込むページです。
         プロジェクト: <a href="https://github.com/kunichiko/MimicX-firmware" target="_blank" rel="noopener">MimicX-firmware</a>
     </p>
 
     <div class="section">
         <h3>準備</h3>
         <div class="steps">
-            <div class="step">このページを開いた状態で、CH32X035 の BOOT ボタンを押しながら USB ケーブルを接続する</div>
-            <div class="step">すぐにこのページの「デバイスに接続」ボタンを押す（BOOT モードは無通信のまま約 5 秒経過すると通常起動に抜けてしまうため、ページを開いてから USB を挿してください）</div>
-            <div class="step">「QinHeng Electronics 製のデバイス」(または「WinChipHead 製の不明なデバイス」) を選択する</div>
+            <div class="step">このページを開いた状態で、Mimic X アダプタの BOOT ボタンを押しながら USB ケーブルを接続する</div>
+            <div class="step">すぐにこのページの「アダプタに接続」ボタンを押す（BOOT モードは無通信のまま約 5 秒経過すると通常起動に抜けてしまうため、ページを開いてから USB を挿してください）</div>
+            <div class="step">ブラウザのダイアログで「QinHeng Electronics 製のデバイス」(または「WinChipHead 製の不明なデバイス」) を選択する</div>
             <div class="step">基板に合うバリアントとバージョンを選択して「書き込み」を押す</div>
             <div class="step">書き込み完了後、USB ケーブルを抜き差しして通常モードで起動する</div>
         </div>
@@ -184,15 +184,15 @@
             Chromium 系ブラウザ（Chrome, Edge）が必要です。Safari / Firefox は WebUSB に対応していません。
         </div>
         <div class="warning">
-            BOOT モード (内蔵 USB DFU ブートローダー) は、ホストから ISP コマンドを受信しないまま約 5 秒経過すると自動的に通常起動へ抜けます。先にこのページを開いてから USB を接続し、すぐに「デバイスに接続」を押してください。間に合わなかった場合は、USB を一度抜いて BOOT ボタンを押しながら挿し直してやり直してください。
+            BOOT モード (内蔵 USB DFU ブートローダー) は、ホストから ISP コマンドを受信しないまま約 5 秒経過すると自動的に通常起動へ抜けます。先にこのページを開いてから USB を接続し、すぐに「アダプタに接続」を押してください。間に合わなかった場合は、USB を一度抜いて BOOT ボタンを押しながら挿し直してやり直してください。
         </div>
         <div class="warning">
-            <strong>Windows をお使いの方へ:</strong> CH32X035 を BOOT モードで認識させるには、事前に <strong>WinUSB ドライバ</strong>を手動でインストールしておく必要があります。手順は <a href="https://kunichiko.ohnaka.jp/products/mimicx/install-winusb" target="_blank" rel="noopener">WinUSB ドライバのインストール手順</a> を参照してください。
+            <strong>Windows をお使いの方へ:</strong> Mimic X アダプタを BOOT モードで認識させるには、事前に <strong>WinUSB ドライバ</strong>を手動でインストールしておく必要があります。手順は <a href="https://kunichiko.ohnaka.jp/products/mimicx/install-winusb" target="_blank" rel="noopener">WinUSB ドライバのインストール手順</a> を参照してください。
         </div>
     </div>
 
     <div class="section">
-        <button id="btn-connect">デバイスに接続</button>
+        <button id="btn-connect">アダプタに接続</button>
         <div id="chip-info">
             <p>チップ: <strong id="chip-name">-</strong> / ブートローダー: <strong id="bootloader-ver">-</strong></p>
         </div>
@@ -207,7 +207,7 @@
             <option value="combined">Combined (全機能: ジョイスティック + X68000 キーボード/マウス)</option>
         </select>
         <div class="variant-desc" id="variant-desc">
-            ご使用の Mimic X 基板に合わせて選択してください。
+            ご使用の Mimic X アダプタの基板に合わせて選択してください。
         </div>
 
         <label for="firmware-select">ファームウェアバージョン</label>
@@ -231,7 +231,7 @@
             <div class="progress-bar"><div class="progress-fill verify" id="progress-verify"></div></div>
         </div>
 
-        <div id="status" class="status-info">デバイスを接続してください</div>
+        <div id="status" class="status-info">アダプタを接続してください</div>
     </div>
 
     <script type="module">
@@ -428,7 +428,7 @@
             try {
                 setStatus('リリース一覧を取得中...');
                 await initVariants();
-                setStatus('デバイスを接続してください');
+                setStatus('アダプタを接続してください');
             } catch (e) {
                 setStatus(`リリース一覧の取得に失敗: ${e.message}`, 'error');
             }
