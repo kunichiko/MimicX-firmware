@@ -83,6 +83,9 @@ void usb_midi_init(void) {
     tx_head = 0;
     tx_tail = 0;
     memset(ep2_bidi_buf, 0, sizeof(ep2_bidi_buf));
+    // iSerialNumber descriptor (string3) を chip UID + variant tag から組み立てる。
+    // USBFSSetup() より前 (= GET_DESCRIPTOR が来うる時点より前) に必ず実行する。
+    usb_init_serial_descriptor();
     USBFSSetup();
     // DMA を 128 バイトバッファに上書き
     UEP_DMA(2) = (uintptr_t)ep2_bidi_buf;

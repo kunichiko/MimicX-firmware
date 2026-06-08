@@ -37,11 +37,15 @@
 #define FUSB_USB_PID 0x0001
 #define FUSB_USB_REV 0x0100
 #define FUSB_STR_MANUFACTURER u"kunichiko"
-// iProduct / iSerialNumber は variant ごとに board_config.h で定義する。
-// VID:PID:iSerial の組合せでホスト OS は個体を識別するため、variant を分けて
-// おかないと別ハードを挿しても古い iProduct がキャッシュ表示されてしまう。
+// iProduct は variant ごとに board_config.h で固定。
+// iSerialNumber (string3) は chip UID + variant tag を起動時に組み立てる
+// (usb_init_serial_descriptor 参照)。VID:PID:iSerial の組合せでホスト OS は
+// 個体を識別するため、
+//   - 別個体の同 variant が挿入されても UID で別デバイスとして区別
+//   - 同一個体に別 variant を焼き直しても tag が変わるので、ホスト OS の
+//     MIDI デバイスキャッシュが古い iProduct を握り続けない
+// の両方を狙う。
 #define FUSB_STR_PRODUCT      BOARD_USB_PRODUCT
-#define FUSB_STR_SERIAL       BOARD_USB_SERIAL
 
 // ---------------------------------------------------------------------------
 // Device Descriptor
@@ -220,9 +224,64 @@ const static struct usb_string_descriptor_struct string1 __attribute__((section(
 const static struct usb_string_descriptor_struct string2 __attribute__((section(".rodata"))) = {
     sizeof(FUSB_STR_PRODUCT), 3, FUSB_STR_PRODUCT
 };
-const static struct usb_string_descriptor_struct string3 __attribute__((section(".rodata"))) = {
-    sizeof(FUSB_STR_SERIAL), 3, FUSB_STR_SERIAL
+
+// ---------------------------------------------------------------------------
+// iSerialNumber (string3): "mimicx-<UID16hex>-<variant-tag>"
+// 例: chip UID = 2CD8ABCD 95CCBD27, variant=joy
+//     → "mimicx-CDABD82C27BDCC95-joy"
+// バイト順は ESIG メモリ並び (= wchisp の表示と一致)。
+// main.c::send_identify_response() の UID 文字列と同じバイト順で揃えてある。
+//
+// 中身は ASCII のみなので、ソース上は char[] で保持し、init 時に uint16_t
+// (UTF-16LE) に widen して wString[] に書き込む。
+// ---------------------------------------------------------------------------
+#define USB_SERIAL_PREFIX_CHARS  7   // strlen("mimicx-")
+#define USB_SERIAL_UID_CHARS     16  // 8 bytes * 2 hex digits
+#define USB_SERIAL_SEP_CHARS     1   // "-"
+#define USB_SERIAL_TOTAL_CHARS   (USB_SERIAL_PREFIX_CHARS + \
+                                  USB_SERIAL_UID_CHARS + \
+                                  USB_SERIAL_SEP_CHARS + \
+                                  BOARD_USB_SERIAL_TAG_CHARS)
+
+struct usb_serial_descriptor_struct {
+    uint8_t bLength;
+    uint8_t bDescriptorType;
+    uint16_t wString[USB_SERIAL_TOTAL_CHARS];
 };
+
+// 起動時に usb_init_serial_descriptor() で wString[] を埋める。
+// .rodata ではなく .data に置く必要があるため const を外し section 指定もしない。
+static struct usb_serial_descriptor_struct string3 = {
+    .bLength = sizeof(struct usb_serial_descriptor_struct),
+    .bDescriptorType = 3,
+    .wString = {0},
+};
+
+/// chip UID と variant tag から string3.wString[] を組み立てる。
+/// usb_midi_init() の冒頭で 1 度だけ呼ぶ (USBFSSetup より前)。
+static inline void usb_init_serial_descriptor(void) {
+    static const char hex[]    = "0123456789ABCDEF";
+    static const char prefix[] = "mimicx-";
+    static const char tag[]    = BOARD_USB_SERIAL_TAG;
+
+    int pos = 0;
+    for (int i = 0; i < USB_SERIAL_PREFIX_CHARS; i++) {
+        string3.wString[pos++] = (uint16_t)(uint8_t)prefix[i];
+    }
+    uint32_t uid[2] = { ESIG->UID0, ESIG->UID1 };
+    for (int w = 0; w < 2; w++) {
+        uint32_t v = uid[w];
+        for (int b = 0; b < 4; b++) {  // little-endian: LSB から
+            uint8_t byte = (v >> (b * 8)) & 0xFFu;
+            string3.wString[pos++] = (uint16_t)(uint8_t)hex[byte >> 4];
+            string3.wString[pos++] = (uint16_t)(uint8_t)hex[byte & 0xF];
+        }
+    }
+    string3.wString[pos++] = '-';
+    for (int i = 0; i < BOARD_USB_SERIAL_TAG_CHARS; i++) {
+        string3.wString[pos++] = (uint16_t)(uint8_t)tag[i];
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Descriptor Lookup Table
@@ -237,7 +296,9 @@ const static struct descriptor_list_struct {
     {0x00000300, (const uint8_t *)&language, 4},
     {0x04090301, (const uint8_t *)&string1, string1.bLength},
     {0x04090302, (const uint8_t *)&string2, string2.bLength},
-    {0x04090303, (const uint8_t *)&string3, string3.bLength},
+    // string3 は非 const (起動時に wString[] を埋める) ため bLength を constant
+    // expression として使えない。サイズは固定なので sizeof(string3) で代用する。
+    {0x04090303, (const uint8_t *)&string3, sizeof(string3)},
 };
 #define DESCRIPTOR_LIST_ENTRIES ((sizeof(descriptor_list)) / (sizeof(struct descriptor_list_struct)))
 

@@ -20,12 +20,15 @@
 
 // ---------------------------------------------------------------------------
 // 各 variant の識別情報:
-//   BOARD_NAME         ASCII 識別子 (デバッグ出力等)
-//   BOARD_USB_PRODUCT  USB iProduct (UTF-16 リテラル, ホスト側 MIDI デバイス名)
-//   BOARD_USB_SERIAL   USB iSerialNumber (UTF-16 リテラル, ホスト側のデバイス
-//                      識別キー。VID:PID:iSerial の組合せで OS が個体を区別する
-//                      ので、variant ごとに必ず変える)
-//   BOARD_FUNCTIONS    有効な hid_function_t* の配列初期化子
+//   BOARD_NAME                 ASCII 識別子 (デバッグ出力等)
+//   BOARD_USB_PRODUCT          USB iProduct (UTF-16 リテラル, ホスト側 MIDI デバイス名)
+//   BOARD_USB_SERIAL_TAG       variant 識別タグ (ASCII リテラル, NUL 終端を除く文字数 = TAG_CHARS)
+//   BOARD_USB_SERIAL_TAG_CHARS BOARD_USB_SERIAL_TAG の文字数 (NUL を含まない)
+//   BOARD_FUNCTIONS            有効な hid_function_t* の配列初期化子
+//
+// USB iSerialNumber は usb_config.h 側で chip UID と TAG を組合せて
+//   "mimicx-<UID16hex>-<tag>" の形式で起動時に組み立てる。VID:PID:iSerial で
+//   ホスト OS が個体を識別するため、UID で個体・TAG で variant を両方反映する。
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -33,10 +36,11 @@
 // ---------------------------------------------------------------------------
 #if defined(BOARD_JOYSTICK)
     extern const hid_function_t joystick_function;
-    #define BOARD_NAME         "mimic-x-joy"
-    #define BOARD_USB_PRODUCT  u"Mimic X (Joystick)"
-    #define BOARD_USB_SERIAL   u"mimicx-joy-001"
-    #define BOARD_FUNCTIONS    { &joystick_function }
+    #define BOARD_NAME                 "mimic-x-joy"
+    #define BOARD_USB_PRODUCT          u"Mimic X (Joystick)"
+    #define BOARD_USB_SERIAL_TAG       "joy"
+    #define BOARD_USB_SERIAL_TAG_CHARS 3
+    #define BOARD_FUNCTIONS            { &joystick_function }
 
 // ---------------------------------------------------------------------------
 // BOARD_X68K_KEYBOARD: X68000 キーボード (本体側に接続するマウスポート付き)
@@ -44,10 +48,11 @@
 #elif defined(BOARD_X68K_KEYBOARD)
     extern const hid_function_t x68k_keyboard_function;
     extern const hid_function_t x68k_mouse_function;
-    #define BOARD_NAME         "mimic-x-x68k"
-    #define BOARD_USB_PRODUCT  u"Mimic X (X68000 Keyboard)"
-    #define BOARD_USB_SERIAL   u"mimicx-x68k-001"
-    #define BOARD_FUNCTIONS    { &x68k_keyboard_function, &x68k_mouse_function }
+    #define BOARD_NAME                 "mimic-x-x68k"
+    #define BOARD_USB_PRODUCT          u"Mimic X (X68000 Keyboard)"
+    #define BOARD_USB_SERIAL_TAG       "x68k"
+    #define BOARD_USB_SERIAL_TAG_CHARS 4
+    #define BOARD_FUNCTIONS            { &x68k_keyboard_function, &x68k_mouse_function }
 
 // ---------------------------------------------------------------------------
 // BOARD_COMBINED: ジョイスティック + X68000 キーボード/マウス 同時搭載
@@ -63,10 +68,11 @@
     extern const hid_function_t joystick_function;
     extern const hid_function_t x68k_keyboard_function;
     extern const hid_function_t x68k_mouse_function;
-    #define BOARD_NAME         "mimic-x-combo"
-    #define BOARD_USB_PRODUCT  u"Mimic X (Combined)"
-    #define BOARD_USB_SERIAL   u"mimicx-combo-001"
-    #define BOARD_FUNCTIONS    { &joystick_function, &x68k_keyboard_function, &x68k_mouse_function }
+    #define BOARD_NAME                 "mimic-x-combo"
+    #define BOARD_USB_PRODUCT          u"Mimic X (Combined)"
+    #define BOARD_USB_SERIAL_TAG       "combo"
+    #define BOARD_USB_SERIAL_TAG_CHARS 5
+    #define BOARD_FUNCTIONS            { &joystick_function, &x68k_keyboard_function, &x68k_mouse_function }
 
 #else
     #error "No BOARD_* macro defined. Set one of BOARD_JOYSTICK, BOARD_X68K_KEYBOARD, BOARD_COMBINED via build_flags."
