@@ -23,21 +23,53 @@ serial は ESP32 の base MAC を 16 桁 hex 化したもの (`0000` + MAC 12 �
 プロトコルバージョンは **0.8** を申告する (アプリの `knownLatest` が 0.7 のままだと
 「アプリより新しいデバイス」の警告が出るが、接続自体は可能)。
 
-## ビルド & 書き込み
+## 環境構築 (macOS)
 
-ESP-IDF v5.x がセットアップ済み (`. $IDF_PATH/export.sh`) であること。
+ビルド系は ESP-IDF (idf.py)。下記は macOS (Apple Silicon) での **検証済み手順**
+(2026-06 時点、ESP-IDF v5.3.5)。
+
+ESP-IDF は Espressif の **EIM (ESP-IDF Installation Manager)** で導入するのが楽だが、
+macOS では **cmake / ninja / Python (3.10–3.13) は EIM が入れてくれない**ため、先に
+Homebrew で用意する (システム Python が 3.10 未満だと EIM が弾く)。
 
 ```sh
-cd MimicX-firmware/esp32
+# 1) 前提パッケージ (Homebrew)
+brew install cmake ninja dfu-util
+brew install python@3.12            # システム python が 3.10 未満なら必須
 
-# ターゲットを esp32 に設定 (初回のみ)
-idf.py set-target esp32
+# 2) EIM を導入
+brew tap espressif/eim
+brew trust espressif/eim            # 新しい brew は tap の信頼登録が必要
+brew install eim
 
-# ビルド → 書き込み → ログ表示 (PORT は環境に合わせて)
-idf.py -p /dev/tty.usbserial-XXXX flash monitor
+# 3) ESP-IDF v5.3.x を非対話インストール (Python 3.12 を使わせる)
+PATH="/opt/homebrew/opt/python@3.12/libexec/bin:$PATH" \
+  eim install -n true -i v5.3.5 -t esp32
+
+# 完了時に表示される activation script のパスを控える
+#   例: ~/.espressif/tools/activate_idf_v5.3.5.sh
 ```
 
-ESP32-WROOM-32 開発ボードに焼けば、基板が無くても疎通確認できる。
+> 公式の git clone + `install.sh` 方式でも可。その場合も macOS では cmake/ninja を
+> Homebrew で入れる必要がある (ESP-IDF は macOS 用にこれらを同梱しない)。
+
+## ビルド & 書き込み
+
+```sh
+# 環境を有効化 (ターミナルごとに必要)
+source ~/.espressif/tools/activate_idf_v5.3.5.sh
+
+# ターゲット設定 (初回のみ) → ビルド
+idf.py -C MimicX-firmware/platforms/esp32 set-target esp32
+idf.py -C MimicX-firmware/platforms/esp32 build
+
+# 書き込み + ログ表示 (PORT は環境に合わせて。例: /dev/cu.usbserial-XXXX)
+idf.py -C MimicX-firmware/platforms/esp32 -p /dev/cu.usbserial-XXXX flash monitor
+# monitor 終了は Ctrl+]
+```
+
+ESP32-WROOM-32 開発ボードに焼けば、基板が無くても疎通確認できる。起動ログに
+`advertising as "MimicX"` が出れば BLE 広告開始 (第一段階 OK)。
 
 ## iOS / macOS での確認手順
 
