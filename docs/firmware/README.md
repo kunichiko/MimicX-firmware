@@ -22,6 +22,9 @@ Mimic X アダプタ (CH32X035 搭載) のファームウェアを Web ブラウ
 
 ## バリアント
 
+CH32 版のビルドは `platforms/ch32x035/` で行う (`cd platforms/ch32x035` 後に下記、
+または `pio run -d platforms/ch32x035 -e <env>`)。
+
 | バリアント | 用途 | ビルド env |
 |-----------|------|-----------|
 | `joystick` | ATARI / メガドライブ 6 ボタン | `pio run -e joystick` |

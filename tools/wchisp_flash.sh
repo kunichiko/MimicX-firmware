@@ -27,7 +27,7 @@ ARG="${1:-joystick}"
 if [ -f "$ARG" ]; then
     BIN="$ARG"
 else
-    BIN="${REPO_ROOT}/.pio/build/${ARG}/firmware.bin"
+    BIN="${REPO_ROOT}/platforms/ch32x035/.pio/build/${ARG}/firmware.bin"
 fi
 
 # ---- 前提チェック -------------------------------------------------------------
@@ -39,7 +39,7 @@ fi
 
 if [ ! -f "$BIN" ]; then
     echo "ERROR: firmware bin not found: $BIN" >&2
-    echo "       先に \`pio run -e <env>\` でビルドしてください" >&2
+    echo "       先に \`pio run -d platforms/ch32x035 -e <env>\` でビルドしてください" >&2
     exit 1
 fi
 

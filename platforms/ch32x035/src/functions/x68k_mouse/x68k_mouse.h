@@ -11,7 +11,7 @@
 #ifndef _X68K_MOUSE_H
 #define _X68K_MOUSE_H
 
-#include "../../hid_function.h"
+#include "hid_function.h"
 #include <stdint.h>
 
 extern const hid_function_t x68k_mouse_function;

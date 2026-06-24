@@ -43,7 +43,7 @@ jobs:
             ~/.platformio/.cache
             ~/.platformio/packages
             ~/.platformio/platforms
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('platforms/ch32x035/platformio.ini') }}
           restore-keys: |
             pio-${{ runner.os }}-
 
@@ -51,7 +51,7 @@ jobs:
         run: pip install --upgrade platformio
 
       - name: Build ${{ matrix.env }}
-        run: pio run -e ${{ matrix.env }}
+        run: pio run -d platforms/ch32x035 -e ${{ matrix.env }}
 
       - name: Stage firmware artifact
         id: stage
@@ -65,7 +65,7 @@ jobs:
             VERSION="dev-${GITHUB_SHA::7}"
           fi
           OUT="dist/mimicx_${{ matrix.env }}_${VERSION}.bin"
-          cp ".pio/build/${{ matrix.env }}/firmware.bin" "$OUT"
+          cp "platforms/ch32x035/.pio/build/${{ matrix.env }}/firmware.bin" "$OUT"
           echo "out=$OUT" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           ls -la dist/

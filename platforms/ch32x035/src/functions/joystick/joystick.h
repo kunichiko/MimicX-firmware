@@ -65,7 +65,7 @@ void joystick_release_all(void);
 void joystick_poll(void);
 
 // hid_function 互換 vtable
-#include "../../hid_function.h"
+#include "hid_function.h"
 extern const hid_function_t joystick_function;
 
 #endif

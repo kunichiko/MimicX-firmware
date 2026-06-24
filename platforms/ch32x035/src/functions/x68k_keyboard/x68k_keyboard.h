@@ -9,7 +9,7 @@
 #define _X68K_KEYBOARD_H
 
 #include <stdint.h>
-#include "../../hid_function.h"
+#include "hid_function.h"
 
 extern const hid_function_t x68k_keyboard_function;
 

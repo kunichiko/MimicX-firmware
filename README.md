@@ -8,12 +8,18 @@
 
 ## ターゲット
 
+将来いろいろなマイコンに展開できるよう、ファーム実体は `platforms/` 配下に
+マイコン別フォルダで分割し、MCU 非依存の共有コードを `platforms/common/` にまとめている。
+
 | ターゲット | ディレクトリ | トランスポート | ビルド系 |
 |---|---|---|---|
-| CH32X035 (有線) | `src/` | USB-MIDI | PlatformIO (`pio run -e ...`) |
-| ESP32-WROOM-32 (無線) | [`esp32/`](esp32/) | BLE-MIDI | ESP-IDF (`idf.py`) |
+| CH32X035 (有線) | [`platforms/ch32x035/`](platforms/ch32x035/) | USB-MIDI | PlatformIO (`pio run -e ...`) |
+| ESP32-WROOM-32 (無線) | [`platforms/esp32/`](platforms/esp32/) | BLE-MIDI | ESP-IDF (`idf.py`) |
+| 共有コード (MCU 非依存) | [`platforms/common/`](platforms/common/) | — | 各ビルドから参照 |
 
-ESP32 版は現在 BLE 疎通スケルトンの段階。詳細は [`esp32/README.md`](esp32/README.md) を参照。
+`platforms/common/mimicx_hid/` に `hid_function.h` (vtable インターフェース) と
+`hid_dispatcher.c/.h` が入る。ESP32 版は現在 BLE 疎通スケルトンの段階。詳細は
+[`platforms/esp32/README.md`](platforms/esp32/README.md) を参照。
 
 ## 対応デバイス
 
@@ -28,7 +34,9 @@ ESP32 版は現在 BLE 疎通スケルトンの段階。詳細は [`esp32/README
 Core を導入してください (`pip install platformio` / `brew install platformio`
 / `uv tool install platformio` / VS Code の "PlatformIO IDE" 拡張のいずれか)。
 
-`platformio.ini` にボード別の env が定義されています:
+CH32 版の PlatformIO プロジェクトは `platforms/ch32x035/` にある。`pio` はその
+ディレクトリで実行する (または `pio run -d platforms/ch32x035 ...`)。
+`platforms/ch32x035/platformio.ini` にボード別の env が定義されています:
 
 | env | 用途 |
 |---|---|
@@ -40,6 +48,7 @@ Core を導入してください (`pip install platformio` / `brew install platf
 ### ビルド
 
 ```sh
+cd platforms/ch32x035
 pio run -e joystick           # ATARI/MD6 ジョイスティック
 pio run -e x68k_keyboard      # X68000 キーボード (キーボード + マウス)
 pio run -e combined           # 全機能同居版
@@ -47,13 +56,14 @@ pio run -e combined           # 全機能同居版
 
 初回は Community-PIO-CH32V プラットフォーム / ch32v003fun フレームワーク /
 riscv toolchain が自動取得されます (数分かかります)。成果物は
-`.pio/build/<env>/firmware.{bin,hex,elf}` に出力されます。
+`platforms/ch32x035/.pio/build/<env>/firmware.{bin,hex,elf}` に出力されます。
 
 ### 書き込み
 
 **A. WCH-LinkE (SWD 経由)**
 
 ```sh
+cd platforms/ch32x035
 pio run -e joystick -t upload   # platformio.ini の upload_protocol=minichlink
 ```
 
@@ -64,12 +74,14 @@ pio run -e joystick -t upload   # platformio.ini の upload_protocol=minichlink
 `wchisp` または下記 WebUSB フラッシャから:
 
 ```sh
-wchisp flash .pio/build/joystick/firmware.bin
+wchisp flash platforms/ch32x035/.pio/build/joystick/firmware.bin
+# または: tools/wchisp_flash.sh joystick
 ```
 
 ### デバッグ
 
 ```sh
+cd platforms/ch32x035
 pio debug -e joystick-debug
 ```
 
@@ -78,6 +90,7 @@ WCH-LinkE 接続時に minichlink GDB サーバ経由でブレーク・ステッ
 ### クリーンビルド
 
 ```sh
+cd platforms/ch32x035
 pio run -e joystick -t clean   # env 単位
 rm -rf .pio                    # 完全クリア (プラットフォーム再取得)
 ```
@@ -98,7 +111,7 @@ rm -rf .pio                    # 完全クリア (プラットフォーム再取
 ```sh
 git checkout main && git pull
 
-# 必要なら src/main.c の FW_VERSION_* (MAJOR / MINOR / PATCH) も更新して commit
+# 必要なら platforms/ch32x035/src/main.c の FW_VERSION_* (MAJOR / MINOR / PATCH) も更新して commit
 # (Web フラッシャーには現れないが、ホスト app の IDENTIFY 応答で表示される値)
 
 # 注釈付きタグを打つ。-m のメッセージが Release body と Web フラッシャーの

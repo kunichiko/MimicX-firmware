@@ -348,7 +348,7 @@ CC は 7bit (-64..+63) なので、それを超える delta はアプリ側で�
 ## 9. 参照
 
 - [MSX Wiki - Mouse/Trackball](https://www.msx.org/wiki/Mouse/Trackball)
-- 実装: `src/functions/joystick/joystick.c` の MSX マウス関連セクション
+- 実装: `platforms/ch32x035/src/functions/joystick/joystick.c` の MSX マウス関連セクション
 - アプリ側: `MimicX-app/lib/joystick_page.dart` の `MsxMouseMode`
 
 ---

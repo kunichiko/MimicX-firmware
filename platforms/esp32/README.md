@@ -1,7 +1,7 @@
 # MimicX-ESP32 (BLE-MIDI 無線アダプタ)
 
 ESP32-WROOM-32 を標準 **BLE-MIDI** ペリフェラルとして動かし、MimicX プロトコルを
-無線で扱うためのファーム。CH32 版 (`../src/`, USB-MIDI) と同じプロトコル
+無線で扱うためのファーム。CH32 版 (`../ch32x035/src/`, USB-MIDI) と同じプロトコル
 (MimicX-protocol) を、トランスポートだけ BLE-MIDI に差し替えたもの。
 
 ビルド系は **ESP-IDF (idf.py)**。CH32 版の PlatformIO ビルドとは独立しており、
@@ -54,7 +54,7 @@ ESP32-WROOM-32 開発ボードに焼けば、基板が無くても疎通確認�
 |---|---|
 | `main/main.c` | NVS / NimBLE host 起動、GAP アドバタイズ |
 | `main/ble_midi.c` | BLE-MIDI GATT サービス、パケット復元 (§2.3)・分割送信 |
-| `main/mimicx_proto.c` | SysEx 処理 (IDENTIFY / ACK)。CH32 `../src/main.c` とバイト互換 |
+| `main/mimicx_proto.c` | SysEx 処理 (IDENTIFY / ACK)。CH32 `../ch32x035/src/main.c` とバイト互換 |
 
 ## 今後 (HAL 分割でのコード共有)
 
