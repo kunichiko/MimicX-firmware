@@ -138,9 +138,13 @@ void mimicx_proto_handle_sysex(const uint8_t *sx, int len) {
             send_capability_response(req_id, ACK_STATUS_OK);
             break;
         case CMD_HEART_BEAT:
+            ESP_LOGI(TAG, "HEART_BEAT (req_id=%d) -> ACK", (int)req_id);
             send_ack(req_id, ACK_STATUS_OK, cmd);
             break;
         case CMD_DISCONNECT:
+            ESP_LOGI(TAG, "DISCONNECT (req_id=%d) -> ACK", (int)req_id);
+            send_ack(req_id, ACK_STATUS_OK, cmd);
+            break;
         case CMD_SET_CONFIG:
         case CMD_SET_LED:
         case CMD_SET_LED_BLINK:
