@@ -7,17 +7,22 @@ ESP32-WROOM-32 を標準 **BLE-MIDI** ペリフェラルとして動かし、Mim
 ビルド系は **ESP-IDF (idf.py)**。CH32 版の PlatformIO ビルドとは独立しており、
 互いに影響しない。
 
-## 現在のステータス: 疎通スケルトン
+## 現在のステータス: ATARI ジョイスティック動作
 
-最初のマイルストーンとして、**iOS / macOS アプリが BLE 経由で接続 → IDENTIFY →
-HEART_BEAT まで完走できること**だけを実装している。
+iOS / macOS / Android アプリから BLE 経由で接続でき、**ATARI ジョイスティックの
+GPIO 出力まで動作する**。
 
 - ✅ 標準 BLE-MIDI GATT サービスを広告
   (service `03B80E5A-…` / characteristic `7772E5DB-…`)
 - ✅ `IDENTIFY_REQUEST` → `IDENTIFY_RESPONSE` (CH32 とバイト互換、joystick/ATARI を 1ch 申告)
 - ✅ `HEART_BEAT` / `DISCONNECT` / `SET_*` / `RESET` → `ACK`
-- ✅ SysEx の BLE-MIDI パケット分割・再結合
-- ❌ デバイス制御 (joystick GPIO / x68k UART / LED) は **未実装** (Note/CC は無視)
+- ✅ SysEx の BLE-MIDI パケット分割・再結合、チャンネルメッセージ (Note/CC) パース
+- ✅ **ATARI ジョイスティック**: Note On/Off (ch0) → GPIO active-low/open-drain 出力
+  (UP=25 DOWN=26 LEFT=27 RIGHT=14 A=13 B=23、暫定割り当て・実機検証済み)
+- ❌ MD6 / MSX マウスモード (CH32 の DMA/EXTI 依存)、x68k キーボード/マウス、LED は **未実装**
+
+⚠ ESP32 GPIO は 3.3V 非 5V トレラント。実機 (5V プルアップ) 直結は不可、レベルシフト
+前提 (基板で対応)。動作確認は 3.3V 範囲 (LED / ロジアナ) で行う。
 
 serial は ESP32 の base MAC を 16 桁 hex 化したもの (`0000` + MAC 12 桁)。
 プロトコルバージョンは **0.8** を申告する (アプリの `knownLatest` が 0.7 のままだと

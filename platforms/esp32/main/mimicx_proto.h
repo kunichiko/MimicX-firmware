@@ -15,3 +15,8 @@ void mimicx_proto_init(void);
 
 // 完全に再結合された 1 件の SysEx (先頭 0xF0 〜 末尾 0xF7 を含む) を処理する。
 void mimicx_proto_handle_sysex(const uint8_t *sx, int len);
+
+// チャンネルボイスメッセージ (Note On/Off, CC) を処理する。
+//   status: ステータスバイト (0x80-0xEF)、d0/d1: データバイト
+// channel 0 の Note On/Off を joystick へ振り分ける。
+void mimicx_proto_handle_channel(uint8_t status, uint8_t d0, uint8_t d1);

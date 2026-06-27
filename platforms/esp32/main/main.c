@@ -30,6 +30,7 @@
 
 #include "ble_midi.h"
 #include "mimicx_proto.h"
+#include "joystick.h"
 
 static const char *TAG = "mimicx";
 #define DEVICE_NAME "MimicX"
@@ -65,6 +66,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnect; reason=%d", event->disconnect.reason);
             ble_midi_set_conn(BLE_HS_CONN_HANDLE_NONE);
+            joystick_release_all();   // 切断時にボタンを押しっぱなしにしない
             start_advertising();
             return 0;
 
@@ -168,6 +170,7 @@ void app_main(void) {
     ble_hs_cfg.sync_cb  = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
 
+    joystick_init();
     mimicx_proto_init();
 
     nimble_port_freertos_init(host_task);

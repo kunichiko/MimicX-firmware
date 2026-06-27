@@ -8,6 +8,7 @@
 // ===================================================================================
 #include "mimicx_proto.h"
 #include "ble_midi.h"
+#include "joystick.h"
 
 #include <string.h>
 #include "esp_mac.h"
@@ -46,6 +47,9 @@ static const char *TAG = "mimicx_proto";
 // HID type / target (プロトコル §6.4.2 / §6.4.3、hid_function.h と一致)
 #define HID_TYPE_JOYSTICK  0x02
 #define TARGET_ATARI       0x01
+
+// joystick が割り当てられている MIDI チャンネル (§3)
+#define MIDI_CH_JOYSTICK   0
 
 // ---------------------------------------------------------------------------
 // serial[16]: ESP32 base MAC (6 byte) を 8 byte に 0 埋めして 16 ASCII hex 化。
@@ -145,11 +149,15 @@ void mimicx_proto_handle_sysex(const uint8_t *sx, int len) {
             ESP_LOGI(TAG, "DISCONNECT (req_id=%d) -> ACK", (int)req_id);
             send_ack(req_id, ACK_STATUS_OK, cmd);
             break;
+        case CMD_RESET:
+            joystick_release_all();
+            send_ack(req_id, ACK_STATUS_OK, cmd);
+            break;
         case CMD_SET_CONFIG:
         case CMD_SET_LED:
         case CMD_SET_LED_BLINK:
-        case CMD_RESET:
             // スケルトンでは no-op。OK を返してアプリのフローを進める。
+            // (SET_CONFIG のパッドモードは現状 ATARI のみ実装なので受理だけする)
             send_ack(req_id, ACK_STATUS_OK, cmd);
             break;
         case CMD_EMIT_REMOTE:
@@ -157,6 +165,22 @@ void mimicx_proto_handle_sysex(const uint8_t *sx, int len) {
             send_ack(req_id, ACK_STATUS_UNKNOWN_CMD, cmd);
             break;
     }
+}
+
+void mimicx_proto_handle_channel(uint8_t status, uint8_t d0, uint8_t d1) {
+    uint8_t type = status & 0xF0;
+    uint8_t ch   = status & 0x0F;
+    // 現状 joystick (channel 0) のみ。他チャンネル (keyboard/mouse) は未実装。
+    if (ch != MIDI_CH_JOYSTICK) return;
+
+    if (type == 0x90 && d1 > 0) {
+        // Note On (velocity > 0)
+        joystick_note_on(d0);
+    } else if (type == 0x80 || (type == 0x90 && d1 == 0)) {
+        // Note Off (または velocity 0 の Note On)
+        joystick_note_off(d0);
+    }
+    // CC (0xB0) は ATARI モードでは未使用
 }
 
 void mimicx_proto_init(void) {

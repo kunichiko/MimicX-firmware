@@ -41,51 +41,82 @@ static uint8_t sx_buf[256];
 static int     sx_len;
 static bool    in_sysex;
 
+// チャンネルボイスメッセージ用パーサ状態 (MIDI running status 対応)
+static uint8_t ch_status = 0;   // 現在のチャンネル status (0 = 未確定)
+static uint8_t ch_data[2];
+static int     ch_idx = 0;
+static int     ch_len = 0;      // 期待データバイト数
+
+static int channel_data_len(uint8_t status) {
+    switch (status & 0xF0) {
+        case 0x80: case 0x90: case 0xA0: case 0xB0: case 0xE0: return 2;
+        case 0xC0: case 0xD0: return 1;
+        default: return 0;
+    }
+}
+
 static void feed_midi(uint8_t b) {
-    if (b == 0xF0) {
+    if (b == 0xF0) {                       // SysEx 開始
         in_sysex = true;
         sx_len = 0;
         sx_buf[sx_len++] = b;
-    } else if (b == 0xF7) {
+        ch_status = 0;                     // running status をクリア
+        return;
+    }
+    if (b == 0xF7) {                       // SysEx 終了
         if (in_sysex && sx_len < (int)sizeof(sx_buf)) {
             sx_buf[sx_len++] = b;
             mimicx_proto_handle_sysex(sx_buf, sx_len);
         }
         in_sysex = false;
-    } else if (b & 0x80) {
-        // その他の status byte (Note/CC 等)。スケルトンでは未処理。SysEx 中なら中断。
+        return;
+    }
+    if (b & 0x80) {                        // ステータスバイト
         in_sysex = false;
-    } else {
-        if (in_sysex && sx_len < (int)sizeof(sx_buf)) {
-            sx_buf[sx_len++] = b;
+        if (b >= 0xF8) return;             // System Real-Time は無視 (running status 維持)
+        int len = channel_data_len(b);
+        if (len > 0) {                     // チャンネルボイスメッセージ
+            ch_status = b;
+            ch_idx = 0;
+            ch_len = len;
+        } else {                           // System Common 等は未対応
+            ch_status = 0;
         }
+        return;
+    }
+    // データバイト
+    if (in_sysex) {
+        if (sx_len < (int)sizeof(sx_buf)) sx_buf[sx_len++] = b;
+        return;
+    }
+    if (ch_status == 0) return;            // status 未確定のデータは捨てる
+    ch_data[ch_idx++] = b;
+    if (ch_idx >= ch_len) {
+        mimicx_proto_handle_channel(ch_status, ch_data[0], ch_len > 1 ? ch_data[1] : 0);
+        ch_idx = 0;                        // running status: 同 status の連続に対応
     }
 }
 
 void ble_midi_rx(const uint8_t *data, int len) {
     if (len < 1) return;
-    // data[0] = packet header (timestampHigh) — 値は使わない
+    // data[0] = packet header (timestampHigh) — 値は使わない。
+    //
+    // BLE-MIDI は MIDI バイト列の中に timestampLow (MSB=1) を挟む形式。各 status /
+    // F0 / F7 の直前に timestampLow が入る。MSB=1 のバイトは timestampLow とみなして
+    // 読み飛ばし、その直後のバイト (status/F0/F7) と、それ以降の MSB=0 データバイトは
+    // すべて feed_midi に渡す。SysEx / チャンネルメッセージの区別は feed_midi が
+    // 内部状態 (in_sysex / running status) で行う。
     int i = 1;
     while (i < len) {
         uint8_t b = data[i];
-        if (in_sysex) {
-            if (b & 0x80) {
-                // SysEx 中の MSB=1 は timestampLow。直後の status (通常 F7) を処理。
-                i++;
-                if (i < len) { feed_midi(data[i]); i++; }
-            } else {
-                feed_midi(b);
-                i++;
-            }
+        if (b & 0x80) {
+            // timestampLow → 読み飛ばし、直後のバイト (status/F0/F7) を渡す。
+            i++;
+            if (i < len) { feed_midi(data[i]); i++; }
         } else {
-            if (b & 0x80) {
-                // timestampLow。直後が status byte。
-                i++;
-                if (i < len) { feed_midi(data[i]); i++; }
-            } else {
-                // 規格外のデータバイト。読み飛ばす。
-                i++;
-            }
+            // データバイト (SysEx ペイロード / note / velocity / CC 値)。
+            feed_midi(b);
+            i++;
         }
     }
 }
@@ -165,7 +196,7 @@ static int gatt_access_cb(uint16_t conn_handle, uint16_t attr_handle,
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
-        .uuid = &midi_svc_uuid.u,
+        .uuid = &ble_midi_svc_uuid.u,
         .characteristics = (struct ble_gatt_chr_def[]){
             {
                 .uuid       = &midi_chr_uuid.u,
