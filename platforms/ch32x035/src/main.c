@@ -24,6 +24,9 @@
 #include "hid_dispatcher.h"
 #include "board_config.h"
 #include "status_led.h"
+#ifdef MIMICX_I2C
+#include "i2c_midi.h"
+#endif
 
 // EMIT_REMOTE (0x07) は x68k_keyboard を搭載する variant でのみ有効。
 // 該当 variant でない場合は CMD_EMIT_REMOTE は UNKNOWN_COMMAND を返す。
@@ -354,6 +357,110 @@ static void process_midi_event(uint8_t cin, uint8_t midi0, uint8_t midi1, uint8_
 }
 
 // ---------------------------------------------------------------------------
+// MIDI-over-I2C 受信 (protocol §2.5)
+// ---------------------------------------------------------------------------
+#ifdef MIMICX_I2C
+
+// I2C ISR から受け取った MIDI バイトを溜める FIFO (ISR→メインループ)。
+#define I2C_RX_FIFO 256
+static volatile uint8_t  i2c_fifo[I2C_RX_FIFO];
+static volatile uint16_t i2c_fifo_head, i2c_fifo_tail;
+
+// raw-MIDI バイト列パーサ (running status 対応)。USB の CIN パケットと違い生バイトから
+// SysEx (F0..F7) / Note / CC を復元し、既存の処理 (process_sysex / hid_dispatch_*) を呼ぶ。
+static uint8_t rawmidi_sx[64];
+static int     rawmidi_sx_len;
+static uint8_t rawmidi_in_sysex;
+static uint8_t rawmidi_status;   // 現在のチャンネル status (running status)
+static uint8_t rawmidi_d[2];
+static int     rawmidi_didx;
+static int     rawmidi_dlen;
+
+static int rawmidi_data_len(uint8_t status) {
+    switch (status & 0xF0) {
+    case 0x80: case 0x90: case 0xA0: case 0xB0: case 0xE0: return 2;
+    case 0xC0: case 0xD0: return 1;
+    default: return 0;
+    }
+}
+
+static void rawmidi_feed(uint8_t b) {
+    if (b == 0xF0) {                 // SysEx 開始
+        rawmidi_in_sysex = 1;
+        rawmidi_sx_len = 0;
+        rawmidi_sx[rawmidi_sx_len++] = b;
+        rawmidi_status = 0;
+        return;
+    }
+    if (b == 0xF7) {                 // SysEx 終了
+        if (rawmidi_in_sysex && rawmidi_sx_len < (int)sizeof(rawmidi_sx)) {
+            rawmidi_sx[rawmidi_sx_len++] = b;
+            process_sysex(rawmidi_sx, rawmidi_sx_len);
+        }
+        rawmidi_in_sysex = 0;
+        return;
+    }
+    if (b & 0x80) {                  // ステータスバイト
+        rawmidi_in_sysex = 0;
+        if (b >= 0xF8) return;       // System Real-Time は無視
+        int l = rawmidi_data_len(b);
+        if (l > 0) { rawmidi_status = b; rawmidi_didx = 0; rawmidi_dlen = l; }
+        else        rawmidi_status = 0;
+        return;
+    }
+    // データバイト
+    if (rawmidi_in_sysex) {
+        if (rawmidi_sx_len < (int)sizeof(rawmidi_sx)) rawmidi_sx[rawmidi_sx_len++] = b;
+        return;
+    }
+    if (!rawmidi_status) return;
+    rawmidi_d[rawmidi_didx++] = b;
+    if (rawmidi_didx >= rawmidi_dlen) {
+        uint8_t ch = rawmidi_status & 0x0F;
+        uint8_t d0 = rawmidi_d[0];
+        uint8_t d1 = (rawmidi_dlen > 1) ? rawmidi_d[1] : 0;
+        switch (rawmidi_status & 0xF0) {
+        case 0x90:
+            if (d1 > 0) hid_dispatch_note_on(ch, d0, d1);
+            else        hid_dispatch_note_off(ch, d0);
+            status_led_on_input_activity();
+            break;
+        case 0x80:
+            hid_dispatch_note_off(ch, d0);
+            status_led_on_input_activity();
+            break;
+        case 0xB0:
+            hid_dispatch_cc(ch, d0, d1);
+            status_led_on_input_activity();
+            break;
+        default: break;
+        }
+        rawmidi_didx = 0;            // running status: 同 status の連続に対応
+    }
+}
+
+// I2C ISR コールバック: 受信 MIDI バイトを FIFO へ積む (処理はメインループで)。
+static void i2c_on_frame(const uint8_t* midi, int len) {
+    for (int i = 0; i < len; i++) {
+        uint16_t nh = (uint16_t)((i2c_fifo_head + 1) % I2C_RX_FIFO);
+        if (nh != i2c_fifo_tail) {
+            i2c_fifo[i2c_fifo_head] = midi[i];
+            i2c_fifo_head = nh;
+        }
+    }
+}
+
+// メインループから呼び、FIFO の MIDI バイトをパーサへ流す。
+static void i2c_midi_pump(void) {
+    while (i2c_fifo_tail != i2c_fifo_head) {
+        uint8_t b = i2c_fifo[i2c_fifo_tail];
+        i2c_fifo_tail = (uint16_t)((i2c_fifo_tail + 1) % I2C_RX_FIFO);
+        rawmidi_feed(b);
+    }
+}
+#endif // MIMICX_I2C
+
+// ---------------------------------------------------------------------------
 // メインループ
 // ---------------------------------------------------------------------------
 
@@ -369,6 +476,10 @@ int main() {
     status_led_init();   // 内部で WAITING (黄) を render する
     hid_dispatch_init();
     usb_midi_init();
+#ifdef MIMICX_I2C
+    // 2 チップ構成: I2C スレーブ (MIDI-over-I2C) を起動。SDA=PC18(pin25)/SCL=PC19(pin24)。
+    i2c_midi_init(0x33, i2c_on_frame);
+#endif
 
     uint8_t cin, midi0, midi1, midi2;
 
@@ -377,6 +488,11 @@ int main() {
         while (usb_midi_receive_event(&cin, &midi0, &midi1, &midi2) > 0) {
             process_midi_event(cin, midi0, midi1, midi2);
         }
+
+#ifdef MIMICX_I2C
+        // I2C (MIDI-over-I2C) で受信したコマンドを処理
+        i2c_midi_pump();
+#endif
 
         // 各 HID 機能の poll
         hid_dispatch_poll();
