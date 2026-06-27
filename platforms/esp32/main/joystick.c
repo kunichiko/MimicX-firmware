@@ -24,13 +24,15 @@ typedef struct {
     const char *name;
 } jbtn_t;
 
+// COMMON (console SELECT 入力) = GPIO32。ATARI モードでは COMMON を未使用 (MD6/MSX 実装時に使う)。
+// 出力 6 本はすべて出力可・strapping/入力専用を回避済み。
 static const jbtn_t BTNS[] = {
-    {1, GPIO_NUM_25, "UP"},
-    {2, GPIO_NUM_26, "DOWN"},
-    {3, GPIO_NUM_27, "LEFT"},
-    {4, GPIO_NUM_14, "RIGHT"},
-    {6, GPIO_NUM_13, "A"},
-    {7, GPIO_NUM_23, "B"},
+    {1, GPIO_NUM_13, "UP"},      // UP     = GPIO13
+    {2, GPIO_NUM_27, "DOWN"},    // DOWN   = GPIO27
+    {3, GPIO_NUM_25, "LEFT"},    // LEFT   = GPIO25
+    {4, GPIO_NUM_33, "RIGHT"},   // RIGHT  = GPIO33
+    {6, GPIO_NUM_14, "A"},       // TRIG-A = GPIO14
+    {7, GPIO_NUM_26, "B"},       // TRIG-B = GPIO26
 };
 #define NBTN ((int)(sizeof(BTNS) / sizeof(BTNS[0])))
 
