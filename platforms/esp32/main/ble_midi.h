@@ -7,8 +7,8 @@
 //
 // 役割:
 //   - characteristic write を受け取り、BLE-MIDI パケットを素の MIDI バイト列へ復元、
-//     SysEx を跨パケットで再結合して mimicx_proto に渡す (プロトコル §2.3)
-//   - 応答 SysEx を BLE-MIDI パケットへ分割して notify 送信
+//     SysEx / channel メッセージを跨パケットで再結合して登録ハンドラへ渡す (§2.3)
+//   - device→host メッセージを BLE-MIDI パケットへ分割して notify 送信
 // ===================================================================================
 #pragma once
 
@@ -29,5 +29,9 @@ uint16_t ble_midi_val_handle(void);             // notify 用の attribute handl
 // characteristic write の生ペイロード (BLE-MIDI パケット) を投入する。
 void ble_midi_rx(const uint8_t *data, int len);
 
-// 完成した SysEx (0xF0..0xF7) を BLE-MIDI パケットに分割して notify 送信する。
-void ble_midi_send_sysex(const uint8_t *sx, int n);
+// 受信した完成 MIDI メッセージ (SysEx 1 件 or channel 1 件) を渡すハンドラを登録する。
+// ブリッジ (main.c) が CH32 への転送 / BRIDGE_IDENTIFY 自答を実装する。
+void ble_midi_set_rx_handler(void (*cb)(const uint8_t *msg, int len));
+
+// device→host メッセージ (SysEx / channel) を BLE-MIDI パケットへ分割して notify する。
+void ble_midi_notify(const uint8_t *msg, int n);

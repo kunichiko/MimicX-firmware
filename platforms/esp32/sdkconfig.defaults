@@ -21,3 +21,10 @@ CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
 
 # ログを USB シリアルで見やすく
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- コア分離 / 動作周波数 ---
+# BLE スタックを core0 に固定し、core1 を I2C ブリッジ (reader task 等) に空ける。
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
+CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
+# CPU を 240MHz にして BLE⇄I2C 中継のレイテンシを下げる。
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y

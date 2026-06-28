@@ -5,7 +5,6 @@
 // プロトコル §2.3 (BLE-MIDI バインディング) に従う。
 // ===================================================================================
 #include "ble_midi.h"
-#include "mimicx_proto.h"
 
 #include <stdbool.h>
 #include <string.h>
@@ -55,6 +54,11 @@ static int channel_data_len(uint8_t status) {
     }
 }
 
+// 受信した完成 MIDI メッセージ (SysEx 1 件 / channel 1 件) を渡すハンドラ。
+// ブリッジ (main.c) が登録し、CH32 への転送 or BRIDGE_IDENTIFY 自答を行う。
+static void (*s_rx_handler)(const uint8_t *msg, int len) = NULL;
+void ble_midi_set_rx_handler(void (*cb)(const uint8_t *msg, int len)) { s_rx_handler = cb; }
+
 static void feed_midi(uint8_t b) {
     if (b == 0xF0) {                       // SysEx 開始
         in_sysex = true;
@@ -66,7 +70,7 @@ static void feed_midi(uint8_t b) {
     if (b == 0xF7) {                       // SysEx 終了
         if (in_sysex && sx_len < (int)sizeof(sx_buf)) {
             sx_buf[sx_len++] = b;
-            mimicx_proto_handle_sysex(sx_buf, sx_len);
+            if (s_rx_handler) s_rx_handler(sx_buf, sx_len);
         }
         in_sysex = false;
         return;
@@ -92,7 +96,12 @@ static void feed_midi(uint8_t b) {
     if (ch_status == 0) return;            // status 未確定のデータは捨てる
     ch_data[ch_idx++] = b;
     if (ch_idx >= ch_len) {
-        mimicx_proto_handle_channel(ch_status, ch_data[0], ch_len > 1 ? ch_data[1] : 0);
+        uint8_t msg[3];
+        msg[0] = ch_status;
+        msg[1] = ch_data[0];
+        int mlen = 2;
+        if (ch_len > 1) msg[2] = ch_data[1], mlen = 3;
+        if (s_rx_handler) s_rx_handler(msg, mlen);
         ch_idx = 0;                        // running status: 同 status の連続に対応
     }
 }
@@ -122,11 +131,12 @@ void ble_midi_rx(const uint8_t *data, int len) {
 }
 
 // ---------------------------------------------------------------------------
-// 送信: 完成 SysEx を BLE-MIDI パケットに分割して notify
-//   1 パケット = [header] ([tsLow] F0 data... | data... | data [tsLow] F7)
-//   SysEx の中身は全て 7bit (MSB=0) なので、tsLow は先頭 F0 と末尾 F7 の前だけ付く。
+// 送信 (device→host): 完成 MIDI メッセージ (SysEx 1 件 or channel 1 件) を
+//   BLE-MIDI パケットに分割して notify。
+//   1 パケット = [header] [tsLow] status data... ( SysEx は末尾 F7 の前にも tsLow )
+//   先頭 status byte と SysEx 末尾 F7 の前に tsLow を付与する。
 // ---------------------------------------------------------------------------
-void ble_midi_send_sysex(const uint8_t *sx, int n) {
+void ble_midi_notify(const uint8_t *sx, int n) {
     if (g_conn == BLE_HS_CONN_HANDLE_NONE || g_val_handle == 0) return;
 
     int mtu = ble_att_mtu(g_conn);
