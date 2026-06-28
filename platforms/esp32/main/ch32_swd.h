@@ -15,8 +15,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 // CH32 を RVSWD で初期化し、チップ種別を判定する (非破壊: コアは halt しない)。
 //   chip_type_out: 判定した種別 (CH32X03x = 0x0d) を返す (NULL 可)
 // 戻り値: CH32X03x を検出できたら true。
 bool ch32_swd_probe(uint32_t *chip_type_out);
+
+// CH32 のフラッシュを書き換える (halt → unlock → erase → program → verify → reboot)。
+//   flash_addr: 通常 0x08000000 (X035 user flash 先頭)
+//   img/len   : 書き込むイメージ。len は 4 の倍数でなくてもよい (末尾は 0xFF 詰め)。
+// 戻り値: 全工程成功 (verify 一致) で true。CH32 は SDI 有効である必要がある。
+// 注意: 失敗時 CH32 は中途半端な状態になり得る (BOOT-DFU で復旧可能)。
+bool ch32_swd_flash(uint32_t flash_addr, const uint8_t *img, size_t len);
