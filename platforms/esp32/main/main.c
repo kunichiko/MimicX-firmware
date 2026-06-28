@@ -39,6 +39,7 @@
 
 #include "ble_midi.h"
 #include "i2c_bridge.h"
+#include "ch32_swd.h"
 
 static const char *TAG = "mimicx";
 #define DEVICE_NAME "MimicX"
