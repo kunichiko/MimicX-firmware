@@ -96,6 +96,14 @@ static uint8_t sysex_receiving;
 
 static void sysex_reset(void) { sysex_len = 0; sysex_receiving = 0; }
 
+// device→host メッセージの送出先。USB-MIDI と (2 チップ構成なら) I2C キューの両方へ。
+static void mimicx_tx(const uint8_t* data, int len) {
+    usb_midi_send_sysex(data, len);
+#ifdef MIMICX_I2C
+    i2c_midi_enqueue(data, len);
+#endif
+}
+
 static void send_identify_response(void) {
     uint8_t rsp[64];
     int i = 0;
@@ -131,7 +139,7 @@ static void send_identify_response(void) {
         rsp[i++] = board_name[j] & 0x7F;
     }
     rsp[i++] = 0xF7;
-    usb_midi_send_sysex(rsp, i);
+    mimicx_tx(rsp, i);
 }
 
 static void send_capability_response(uint8_t req_id, uint8_t status) {
@@ -145,7 +153,7 @@ static void send_capability_response(uint8_t req_id, uint8_t status) {
     rsp[i++] = status & 0x7F;
     i += hid_dispatch_build_capabilities(rsp + i, sizeof(rsp) - i - 1);
     rsp[i++] = 0xF7;
-    usb_midi_send_sysex(rsp, i);
+    mimicx_tx(rsp, i);
 }
 
 // 汎用 ACK (専用レスポンスを持たないコマンド用)
@@ -158,7 +166,7 @@ static void send_ack(uint8_t req_id, uint8_t status, uint8_t orig_cmd) {
         (uint8_t)(orig_cmd & 0x7F),
         0xF7,
     };
-    usb_midi_send_sysex(rsp, sizeof(rsp));
+    mimicx_tx(rsp, sizeof(rsp));
 }
 
 static void process_sysex(const uint8_t* data, int len) {

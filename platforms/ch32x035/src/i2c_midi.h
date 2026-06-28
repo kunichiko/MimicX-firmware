@@ -19,8 +19,8 @@
 //              MIDI バイト列 (先頭の LEN を除いた len バイト) を渡すコールバック。
 void i2c_midi_init(uint8_t addr7, void (*on_frame)(const uint8_t* midi, int len));
 
-// device→host メッセージ (IDENTIFY_RSP / ACK / TARGET_RX 等) を読み出しキューに積む。
-// (Phase 2 で送信経路に接続予定。Phase 1 では未使用でも安全。)
+// device→host メッセージ (IDENTIFY_RSP / ACK / TARGET_RX 等) を読み出しキューに積み、
+// INT 線をアサートする。ホストが I2C read で取り出す ([LEN][MIDI bytes])。
 void i2c_midi_enqueue(const uint8_t* midi, int len);
 
 #endif
