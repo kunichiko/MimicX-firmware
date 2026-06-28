@@ -61,6 +61,7 @@
 #define CMD_SET_CONFIG    0x10
 #define CMD_SET_LED       0x20  // ホスト→デバイス: PB0 LED の色 override (RGB=255,255,255 で reset)
 #define CMD_SET_LED_BLINK 0x21  // ホスト→デバイス: PB0 LED の点滅速度 override (None/Slow/Mid/High)
+#define CMD_ENTER_SWD     0x7E  // 2チップ構成専用: SWD 更新モードへ移行 (SDI 再有効化, 戻らない)
 #define CMD_RESET         0x7F
 
 // ---------------------------------------------------------------------------
@@ -226,6 +227,17 @@ static void process_sysex(const uint8_t* data, int len) {
         send_ack(req_id, ACK_STATUS_OK, cmd);
         break;
     }
+#ifdef MIMICX_I2C
+    case CMD_ENTER_SWD: {
+        // F0 7D 01 7E <req_id> F7 (2チップ構成専用)
+        // HID を解放してから SWD 更新モードへ移行する (戻らない)。ACK は返せない
+        // (直後に I2C を停止し PC18/PC19 をデバッグへ明け渡すため)。ホスト(ESP32)は
+        // 本コマンド送出後、一定時間待ってから SWD に切り替える。
+        hid_dispatch_release_all();
+        i2c_midi_enter_swd();
+        break;  // 到達しない
+    }
+#endif
     case CMD_SET_LED: {
         // F0 7D 01 20 <req_id> <R> <G> <B> F7  (R/G/B は 7bit, 0-127)
         // 7bit → 8bit スケール: (v<<1) | (v>>6)  (0→0, 127→255 で単調)

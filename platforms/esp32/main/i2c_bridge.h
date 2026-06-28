@@ -19,3 +19,6 @@ void i2c_bridge_init(void (*on_rx)(const uint8_t* midi, int len));
 
 // host→device メッセージ (Note/CC/SysEx) を CH32 へ送る。
 void i2c_bridge_write(const uint8_t* midi, int len);
+
+// I2C を停止し SDA/SCL を解放する (SWD でフラッシュを書く前に呼ぶ)。再 init で復帰可能。
+void i2c_bridge_deinit(void);

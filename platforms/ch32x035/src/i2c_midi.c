@@ -155,6 +155,24 @@ void i2c_midi_init(uint8_t addr7, void (*on_frame)(const uint8_t* midi, int len)
 }
 
 // ---------------------------------------------------------------------------
+// ファーム更新: SWD へ明け渡す
+// ---------------------------------------------------------------------------
+void i2c_midi_enter_swd(void) {
+    // 1) I2C 割り込みと周辺を停止。
+    NVIC_DisableIRQ(I2C1_EV_IRQn);
+    NVIC_DisableIRQ(I2C1_ER_IRQn);
+    I2C1->CTLR1 &= ~I2C_CTLR1_PE;
+    // 2) INT 線を解放 (Hi-Z/High)。
+    int_deassert();
+    // 3) SDI(2線デバッグ) を再有効化: AFIO_PCFR1 SW_CFG[26:24]=0 → PC18/PC19 をデバッグへ。
+    //    これ以降 ESP32 が SWD でコアを halt してフラッシュを書き換えられる。
+    AFIO->PCFR1 &= ~(0x7u << 24);
+    // 4) コア割り込みを止めて待機 (デバッガが halt するまで何もしない)。
+    __disable_irq();
+    while (1) { }
+}
+
+// ---------------------------------------------------------------------------
 // 割り込みハンドラ
 // ---------------------------------------------------------------------------
 void I2C1_EV_IRQHandler(void) __attribute__((interrupt));

@@ -116,9 +116,24 @@ void i2c_bridge_init(void (*on_rx)(const uint8_t* midi, int len)) {
 
     xTaskCreate(reader_task, "i2c_rd", 4096, NULL, 8, &s_reader);
 
-    gpio_install_isr_service(0);
+    // ISR サービスは一度だけインストール (再 init 時の二重 install は無視)。
+    esp_err_t isr = gpio_install_isr_service(0);
+    if (isr != ESP_OK && isr != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "gpio_install_isr_service rc=%d", (int)isr);
+    }
     gpio_isr_handler_add(I2C_INT_GPIO, int_isr, NULL);
 
     ESP_LOGI(TAG, "I2C bridge: SDA=%d SCL=%d INT=%d addr=0x%02X",
              I2C_SDA_GPIO, I2C_SCL_GPIO, I2C_INT_GPIO, CH32_ADDR);
+}
+
+// I2C を完全に停止し SDA/SCL(GPIO21/22) を解放する。SWD でフラッシュを書く前に呼ぶ。
+// (ISR サービス自体はアンインストールしない。再 init で再利用する)
+void i2c_bridge_deinit(void) {
+    if (s_reader) { vTaskDelete(s_reader); s_reader = NULL; }
+    gpio_isr_handler_remove(I2C_INT_GPIO);
+    if (s_dev) { i2c_master_bus_rm_device(s_dev); s_dev = NULL; }
+    if (s_bus) { i2c_del_master_bus(s_bus); s_bus = NULL; }  // SDA/SCL を解放
+    if (s_mutex) { vSemaphoreDelete(s_mutex); s_mutex = NULL; }
+    ESP_LOGI(TAG, "I2C bridge deinit (SDA/SCL released)");
 }

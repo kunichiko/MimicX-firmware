@@ -23,4 +23,9 @@ void i2c_midi_init(uint8_t addr7, void (*on_frame)(const uint8_t* midi, int len)
 // INT 線をアサートする。ホストが I2C read で取り出す ([LEN][MIDI bytes])。
 void i2c_midi_enqueue(const uint8_t* midi, int len);
 
+// ファーム更新用: I2C を停止し SDI(2線デバッグ)を再有効化して PC18/PC19 を解放し、
+// 待機ループに入る (戻らない)。以降はホスト MCU (ESP32) が SWD でフラッシュを書き換える。
+// 復帰は SWD reboot か電源再投入 (通常の I2C スレーブで起動し直す)。
+void i2c_midi_enter_swd(void) __attribute__((noreturn));
+
 #endif
