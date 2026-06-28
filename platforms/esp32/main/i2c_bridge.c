@@ -28,6 +28,13 @@ static SemaphoreHandle_t       s_mutex;     // バス排他 (write と read タ�
 static TaskHandle_t            s_reader;
 static void (*s_on_rx)(const uint8_t* midi, int len);
 
+// 同期リクエスト (IDENTIFY 等) 用の一時キャプチャ。capturing 中は reader_task が
+// 受信フレームを s_on_rx ではなくこのバッファへ渡し、セマフォで通知する。
+static volatile bool      s_capturing;
+static uint8_t            s_cap_buf[FRAME_MAX];
+static volatile int       s_cap_len;
+static SemaphoreHandle_t  s_cap_sem;
+
 // host→device: [LEN][MIDI] を CH32 へ書き込む。
 void i2c_bridge_write(const uint8_t* midi, int len) {
     if (len <= 0 || len > FRAME_MAX - 1) return;
@@ -38,6 +45,25 @@ void i2c_bridge_write(const uint8_t* midi, int len) {
     esp_err_t e = i2c_master_transmit(s_dev, frame, len + 1, 50);
     xSemaphoreGive(s_mutex);
     if (e != ESP_OK) ESP_LOGW(TAG, "write err %d", (int)e);
+}
+
+// 同期リクエスト: req を送り、CH32 の応答フレーム 1 件を resp に取得する。
+// 戻り値 = 応答バイト数 (>0) / タイムアウト・エラーは <=0。OTA の IDENTIFY 取得に使う。
+int i2c_bridge_request(const uint8_t* req, int reqlen,
+                       uint8_t* resp, int respmax, int timeout_ms) {
+    if (!s_cap_sem) return -1;
+    s_cap_len = 0;
+    xSemaphoreTake(s_cap_sem, 0);     // 残留シグナルをクリア
+    s_capturing = true;
+    i2c_bridge_write(req, reqlen);
+    int got = -1;
+    if (xSemaphoreTake(s_cap_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        got = s_cap_len;
+        if (got > respmax) got = respmax;
+        memcpy(resp, s_cap_buf, got);
+    }
+    s_capturing = false;
+    return got;
 }
 
 // device→host: CH32 から 1 フレーム読む。戻り値 = payload バイト数 (0=データ無し, <0=err)。
@@ -65,7 +91,15 @@ static void reader_task(void *arg) {
         for (int guard = 0; guard < 32; guard++) {     // 1 起床で最大 32 フレーム
             int n = read_one_frame(midi, sizeof(midi));
             if (n <= 0) break;                          // 0=空, <0=err
-            if (s_on_rx) s_on_rx(midi, n);
+            if (s_capturing) {
+                if (s_cap_len == 0) {                   // 最初の 1 フレームだけ捕捉
+                    memcpy(s_cap_buf, midi, n);
+                    s_cap_len = n;
+                    if (s_cap_sem) xSemaphoreGive(s_cap_sem);
+                }
+            } else if (s_on_rx) {
+                s_on_rx(midi, n);
+            }
         }
     }
 }
@@ -80,6 +114,9 @@ static void IRAM_ATTR int_isr(void *arg) {
 void i2c_bridge_init(void (*on_rx)(const uint8_t* midi, int len)) {
     s_on_rx = on_rx;
     s_mutex = xSemaphoreCreateMutex();
+    if (!s_cap_sem) s_cap_sem = xSemaphoreCreateBinary();
+    s_capturing = false;
+    s_cap_len = 0;
 
     i2c_master_bus_config_t bus_cfg = {
         .clk_source        = I2C_CLK_SRC_DEFAULT,

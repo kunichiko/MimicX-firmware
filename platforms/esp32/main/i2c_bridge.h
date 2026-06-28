@@ -22,3 +22,8 @@ void i2c_bridge_write(const uint8_t* midi, int len);
 
 // I2C を停止し SDA/SCL を解放する (SWD でフラッシュを書く前に呼ぶ)。再 init で復帰可能。
 void i2c_bridge_deinit(void);
+
+// 同期リクエスト: req (MIDI/SysEx バイト列) を送り、CH32 の応答 1 件を resp へ取得する。
+// OTA の IDENTIFY 取得用。戻り値 = 応答バイト数 (>0)、タイムアウト/エラーは <=0。
+int i2c_bridge_request(const uint8_t* req, int reqlen,
+                       uint8_t* resp, int respmax, int timeout_ms);

@@ -40,6 +40,7 @@
 #include "ble_midi.h"
 #include "i2c_bridge.h"
 #include "ch32_swd.h"
+#include "ch32_ota.h"
 
 static const char *TAG = "mimicx";
 #define DEVICE_NAME "MimicX"
@@ -277,6 +278,10 @@ void app_main(void) {
     // I2C ブリッジ (CH32 デバイスエンジンへの橋渡し) を起動。
     // BT コントローラの割り込み確保と競合しないよう NimBLE 初期化の後に行う。
     i2c_bridge_init(on_i2c_rx);
+
+    // 起動時 CH32 ファーム自動更新: 内蔵イメージが新しければ SWD で書き換える。
+    // (更新時は内部で I2C ブリッジを再 init して戻る)
+    ch32_ota_check_and_update(on_i2c_rx);
 
     // BLE 受信 → 中継ハンドラを登録 (i2c_bridge_init 完了後)。
     ble_midi_set_rx_handler(on_ble_rx);
