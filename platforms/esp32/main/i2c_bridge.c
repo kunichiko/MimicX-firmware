@@ -98,6 +98,12 @@ void i2c_bridge_init(void (*on_rx)(const uint8_t* midi, int len)) {
     };
     ESP_ERROR_CHECK(i2c_master_bus_add_device(s_bus, &dev_cfg, &s_dev));
 
+    // 起動時ヘルスチェック: CH32 (デバイスエンジン) が I2C で応答するか確認。
+    esp_err_t probe = i2c_master_probe(s_bus, CH32_ADDR, 100);
+    if (probe == ESP_OK) ESP_LOGI(TAG, "CH32 device engine found at 0x%02X", CH32_ADDR);
+    else                 ESP_LOGW(TAG, "CH32 not responding at 0x%02X (rc=%d) - check wiring",
+                                  CH32_ADDR, (int)probe);
+
     // INT 入力 (CH32 active-low / open-drain)。内蔵プルアップ有効、立ち下がり割り込み。
     gpio_config_t ic = {
         .pin_bit_mask = (1ULL << I2C_INT_GPIO),

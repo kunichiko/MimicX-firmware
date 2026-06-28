@@ -8,10 +8,10 @@
 //
 // I2C ペリフェラル設定は ch32v003fun の i2c_slave サンプルに準拠。
 //
-// ⚠ ハード確認ポイント:
-//   - I2C1 remap option 3 (SCL→PC19/pin24, SDA→PC18/pin25): AFIO_PCFR1[4:2]=3。
-//     データシートの remap 表と要照合 (pin 機能名 "SCL_3/SDA_3" から推定)。
-//   - PC18/PC19 は SWD(DIO/DCK) と兼用 → I2C 動作中は SWD 書き込み不可。
+// ハード設定 (CH32X035 RM 8.3.2.1 AFIO_PCFR1 で確認済み):
+//   - I2C1 remap option 3 (I2C1_RM[4:2]=011): SCL→PC19/pin24, SDA→PC18/pin25。
+//   - PC18/PC19 は既定で SDI(2線式デバッグ)が占有 → SW_CFG[26:24]=100 で SDI を無効化して解放。
+//     これ以降 PC18/PC19 経由の SWD 書き込みは不可 (書き込みは BOOT-DFU/wchisp で行う)。
 //   - INT 線は PB1 (暫定)。基板に合わせて I2C_INT_PIN を変更可。
 // ===================================================================================
 #include "i2c_midi.h"
@@ -111,13 +111,22 @@ void i2c_midi_init(uint8_t addr7, void (*on_frame)(const uint8_t* midi, int len)
     I2C_INT_PORT->CFGLR |=  ((GPIO_Speed_50MHz | GPIO_CNF_OUT_OD) << (4 * I2C_INT_PIN));
     int_deassert();
 
+    // PC18/PC19 は既定で SDI(2線式デバッグ)が占有しているため、まず SDI を無効化してから
+    // I2C1 を remap option 3 へ切り替える (どちらも AFIO_PCFR1、RM 8.3.2.1 で確認済み)。
+    //   SW_CFG[26:24]=100 : SWD(SDI) off → PC18/PC19 を AF として使用可
+    //   I2C1_RM[4:2]=011  : SCL/PC19, SDA/PC18
+    // ⚠ これ以降 PC18/PC19 では SWD 書き込み不可。書き込みは BOOT-DFU (wchisp) で行う。
+    {
+        uint32_t pcfr1 = AFIO->PCFR1;
+        pcfr1 &= ~(AFIO_PCFR1_I2C1_REMAP | (0x7u << 24));  // I2C1_RM[4:2], SW_CFG[26:24] をクリア
+        pcfr1 |=  (0x3u << 2) | (0x4u << 24);              // I2C1_RM=011, SW_CFG=100 (SDI off)
+        AFIO->PCFR1 = pcfr1;
+    }
+
     // PC18(SDA)/PC19(SCL): AF オープンドレイン (高位ピンは CFGXR)
     const uint32_t af_od = (GPIO_Speed_50MHz | GPIO_CNF_OUT_OD_AF);
     GPIOC->CFGXR &= ~((0xfu << ((18 - 16) * 4)) | (0xfu << ((19 - 16) * 4)));
     GPIOC->CFGXR |=  (af_od << ((18 - 16) * 4)) | (af_od << ((19 - 16) * 4));
-
-    // I2C1 remap option 3 (SCL→PC19, SDA→PC18)
-    AFIO->PCFR1 = (AFIO->PCFR1 & ~AFIO_PCFR1_I2C1_REMAP) | (0x3u << 2);
 
     // I2C1 ペリフェラル (slave)
     RCC->APB1PCENR |= RCC_APB1Periph_I2C1;
