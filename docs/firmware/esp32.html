@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mimic X (ESP32 無線版) Firmware Update</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 720px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+        }
+        h1 { color: #00d2ff; border-bottom: 2px solid #00d2ff; padding-bottom: 10px; }
+        h3 { margin-top: 0; color: #b8c5d1; }
+        .section { background: #16213e; border-radius: 8px; padding: 20px; margin: 20px 0; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; }
+        select {
+            width: 100%; padding: 8px; margin-bottom: 12px;
+            border: 1px solid #444; border-radius: 4px; background: #0f3460; color: #e0e0e0;
+        }
+        .warning {
+            background: #3d3000; color: #ffd700; padding: 12px; border-radius: 4px;
+            margin: 12px 0; font-size: 14px;
+        }
+        .variant-desc, .version-info {
+            font-size: 13px; color: #b8c5d1; margin-top: -8px; margin-bottom: 12px; line-height: 1.5;
+        }
+        .version-info { color: #888; }
+        .release-note {
+            font-size: 13px; color: #b8c5d1; background: #0f3460; border-left: 3px solid #00d2ff;
+            border-radius: 4px; padding: 8px 12px; margin: 4px 0 8px 0; line-height: 1.5;
+            white-space: pre-wrap; word-wrap: break-word;
+        }
+        .release-note:empty { display: none; }
+        .step { margin: 8px 0; padding-left: 20px; }
+        .step::before { content: counter(step) ". "; counter-increment: step; font-weight: bold; color: #00d2ff; }
+        .steps { counter-reset: step; }
+        #status { margin-top: 16px; padding: 12px; border-radius: 4px; min-height: 20px; }
+        .status-info { background: #0f3460; }
+        .status-success { background: #1b4332; color: #53d769; }
+        .status-error { background: #3d0000; color: #e94560; }
+        a { color: #00d2ff; }
+        esp-web-install-button { --esp-tools-button-color: #000; --esp-tools-button-bg-color: #00d2ff; }
+    </style>
+    <!-- esp-web-tools (Web Serial 経由で ESP32 を書き込む) -->
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+</head>
+<body>
+    <h1>Mimic X 無線版 (ESP32) Firmware Update</h1>
+
+    <p>
+        Mimic X ワイヤレスアダプタ (ESP32-WROOM-32 + CH32X035 の 2 チップ構成) の
+        ESP32 側ファームウェアを Web ブラウザから書き込むページです。
+        ESP32 ファームは対応する CH32 ファームを内包しており、起動時に CH32 を自動同期します。
+        プロジェクト: <a href="https://github.com/kunichiko/MimicX-firmware" target="_blank" rel="noopener">MimicX-firmware</a><br>
+        CH32 単体 (USB 直結版) の書き込みは <a href="./index.html">こちら (WebUSB フラッシャー)</a>。
+    </p>
+
+    <div class="section">
+        <h3>準備</h3>
+        <div class="steps">
+            <div class="step">ESP32 ボードを USB ケーブルで PC に接続する (BOOT 操作は不要。esptool が自動でブートローダへ入れます)</div>
+            <div class="step">基板に合うバリアントとバージョンを選択する</div>
+            <div class="step">「CONNECT」ボタンを押し、シリアルポート (CP210x / CH340 等) を選択する</div>
+            <div class="step">「INSTALL」を押して書き込む (フラッシュ全体を上書きします)</div>
+        </div>
+        <div class="warning">
+            Web Serial 対応の Chromium 系ブラウザ (Chrome / Edge) が必要です。Safari / Firefox は非対応です。
+        </div>
+        <div class="warning">
+            これは <strong>ESP32</strong> 用です。CH32 単体 (USB 直結) のアダプタには使えません
+            (その場合は <a href="./index.html">CH32 用フラッシャー</a> を使用)。
+        </div>
+    </div>
+
+    <div class="section">
+        <label for="variant-select">基板バリアント</label>
+        <select id="variant-select">
+            <option value="" disabled selected>-- バリアントを選択 --</option>
+            <option value="joystick">ジョイスティック (ATARI / メガドライブ 6 ボタン)</option>
+            <option value="keyboard">X68000 キーボード (キーボード + マウス)</option>
+            <option value="combined">Combined (全機能)</option>
+        </select>
+        <div class="variant-desc" id="variant-desc">
+            ご使用の Mimic X ワイヤレスアダプタの基板に合わせて選択してください。
+        </div>
+
+        <label for="firmware-select">ファームウェアバージョン</label>
+        <select id="firmware-select" disabled>
+            <option value="" disabled selected>-- 先にバリアントを選択してください --</option>
+        </select>
+        <div class="release-note" id="firmware-note"></div>
+        <div class="version-info" id="firmware-size"></div>
+
+        <esp-web-install-button id="install-btn" style="display:none;"></esp-web-install-button>
+
+        <div id="status" class="status-info">バリアントとバージョンを選択してください</div>
+    </div>
+
+    <script type="module">
+        const VARIANT_META = {
+            joystick: 'ATARI 仕様 / メガドライブ 6 ボタンパッドを模倣する基板向け。',
+            keyboard: 'X68000 キーボード基板向け (キーボード + マウス)。',
+            combined: '全機能 (ジョイスティック + X68000 キーボード/マウス) 同居バリアント。',
+        };
+
+        // { [variant]: [{ version, date, url(absolute), note }, ...] }  新しい順
+        const VARIANTS = { joystick: [], keyboard: [], combined: [] };
+        const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
+
+        // ESP32 の merged イメージ (offset 0x0) アセット名規約:
+        //   mimicx-esp32_<variant>_v<version>.bin   (..._app.bin は app 単体なので除外)
+        // CH32 と同様、CORS の都合で bin は同一オリジン (docs/firmware/firmwares/) から取得する。
+        async function initVariants() {
+            const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+            if (!res.ok) throw new Error(`Releases API HTTP ${res.status}`);
+            const releases = await res.json();
+            for (const rel of releases) {
+                const date = (rel.published_at || '').slice(0, 10);
+                const note = (rel.body || '').trim();
+                for (const a of rel.assets || []) {
+                    const m = /^mimicx-esp32_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
+                    if (!m) continue;
+                    const variant = m[1];
+                    if (!VARIANTS[variant]) continue;
+                    VARIANTS[variant].push({
+                        version: rel.tag_name,
+                        date,
+                        // 絶対 URL (manifest が blob: URL のため相対解決できない)
+                        url: new URL(`firmwares/${a.name}`, location.href).href,
+                        note,
+                    });
+                }
+            }
+        }
+
+        const variantSelect = document.getElementById('variant-select');
+        const variantDesc = document.getElementById('variant-desc');
+        const firmwareSelect = document.getElementById('firmware-select');
+        const firmwareNote = document.getElementById('firmware-note');
+        const firmwareSize = document.getElementById('firmware-size');
+        const installBtn = document.getElementById('install-btn');
+        const status = document.getElementById('status');
+
+        function setStatus(msg, type = 'info') {
+            status.textContent = msg;
+            status.className = `status-${type}`;
+        }
+
+        // 選択中 variant/version から esp-web-tools manifest を組み立て、blob URL を
+        // install ボタンへ割り当てる。parts[].path は絶対 URL を使う。
+        function setManifest(variant, rel) {
+            const manifest = {
+                name: `MimicX ESP32 (${variant})`,
+                version: rel.version,
+                new_install_prompt_erase: true,
+                builds: [
+                    { chipFamily: 'ESP32', parts: [{ path: rel.url, offset: 0 }] },
+                ],
+            };
+            const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+            installBtn.manifest = URL.createObjectURL(blob);
+            installBtn.style.display = 'inline-block';
+        }
+
+        function populateFirmwareList(variantKey) {
+            firmwareSelect.innerHTML = '';
+            const releases = VARIANTS[variantKey] || [];
+            const ph = document.createElement('option');
+            ph.value = ''; ph.disabled = true; ph.selected = true;
+            ph.textContent = releases.length ? '-- バージョンを選択 --' : '(リリースがありません)';
+            firmwareSelect.appendChild(ph);
+            for (const r of releases) {
+                const opt = document.createElement('option');
+                opt.value = r.version;
+                opt.dataset.note = r.note || '';
+                opt.dataset.url = r.url;
+                opt.textContent = `${r.version} (${r.date})`;
+                firmwareSelect.appendChild(opt);
+            }
+            firmwareSelect.disabled = releases.length === 0;
+        }
+
+        variantSelect.addEventListener('change', () => {
+            const v = variantSelect.value;
+            if (!v) return;
+            variantDesc.textContent = VARIANT_META[v];
+            populateFirmwareList(v);
+            installBtn.style.display = 'none';
+            firmwareNote.textContent = '';
+            firmwareSize.textContent = '';
+            setStatus('バージョンを選択してください');
+        });
+
+        firmwareSelect.addEventListener('change', () => {
+            const v = variantSelect.value;
+            const ver = firmwareSelect.value;
+            if (!v || !ver) return;
+            const rel = (VARIANTS[v] || []).find(r => r.version === ver);
+            if (!rel) return;
+            firmwareNote.textContent = rel.note || '';
+            firmwareSize.textContent = `イメージ: ${rel.url.split('/').pop()}`;
+            setManifest(v, rel);
+            setStatus('「CONNECT」を押して ESP32 のシリアルポートを選択してください');
+        });
+
+        (async () => {
+            try {
+                setStatus('リリース一覧を取得中...');
+                await initVariants();
+                setStatus('バリアントとバージョンを選択してください');
+            } catch (e) {
+                setStatus(`リリース一覧の取得に失敗: ${e.message}`, 'error');
+            }
+        })();
+    </script>
+</body>
+</html>

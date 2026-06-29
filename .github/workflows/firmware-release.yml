@@ -230,17 +230,24 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Download CH32 standalone artifacts
+      - name: Download CH32 + ESP32 artifacts
         uses: actions/download-artifact@v7
         with:
           path: artifacts
-          pattern: firmware-ch32-*
+          pattern: firmware-*
           merge-multiple: true
 
       - name: Stage bins under docs/firmware/firmwares/
         run: |
           mkdir -p docs/firmware/firmwares
-          cp artifacts/*.bin docs/firmware/firmwares/
+          # CH32 standalone (mimicx_*) と ESP32 merged (mimicx-esp32_*) を同一オリジン配備。
+          # ESP32 app 単体 (*_app.bin) は Web フラッシャーで使わないので除外 (Release のみ)。
+          for f in artifacts/*.bin; do
+            case "$(basename "$f")" in
+              *_app.bin) ;;
+              *) cp "$f" docs/firmware/firmwares/ ;;
+            esac
+          done
           ls -la docs/firmware/firmwares/
 
       - name: Commit and push
