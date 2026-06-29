@@ -202,11 +202,18 @@ static void start_advertising(void) {
     struct ble_gap_adv_params adv_params;
     int rc;
 
+    // プライマリ広告に flags + 128bit サービス UUID + デバイス名 を載せる。
+    // 名前を scan response だけに置くと、Windows (universal_ble のパッシブスキャン) が
+    // 名前を拾えず result.name==null でスキップされ発見できない。31 バイトに収まる
+    // (flags 3 + UUID128 18 + name "MimicX" 8 = 29) ので名前もプライマリへ入れる。
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.uuids128 = (ble_uuid128_t *)&ble_midi_svc_uuid;
     fields.num_uuids128 = 1;
     fields.uuids128_is_complete = 1;
+    fields.name = (uint8_t *)DEVICE_NAME;
+    fields.name_len = strlen(DEVICE_NAME);
+    fields.name_is_complete = 1;
 
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) { ESP_LOGE(TAG, "adv_set_fields rc=%d", rc); return; }
