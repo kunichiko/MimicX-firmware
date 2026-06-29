@@ -37,10 +37,16 @@
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
 
+#include "host/ble_store.h"
+
 #include "ble_midi.h"
 #include "i2c_bridge.h"
 #include "ch32_swd.h"
 #include "ch32_ota.h"
+
+// NimBLE のボンド永続化ストア (NVS)。ESP-IDF が提供 (ヘッダが include パスに無いため
+// 前方宣言する。ESP-IDF の NimBLE 例と同じ書き方)。
+void ble_store_config_init(void);
 
 static const char *TAG = "mimicx";
 #define DEVICE_NAME "MimicX"
@@ -187,6 +193,26 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             ESP_LOGI(TAG, "mtu update; mtu=%d", event->mtu.value);
             return 0;
 
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            // ペアリング/暗号化の成立。status==0 で成功。
+            ESP_LOGI(TAG, "encryption change; status=%d", event->enc_change.status);
+            return 0;
+
+        case BLE_GAP_EVENT_REPEAT_PAIRING: {
+            // 相手 (Windows) がボンドを削除して再ペアリングしてきたのに、ESP32 側に
+            // 古いボンドが残っているケース。古いボンドを消して再ペアリングを許可する。
+            struct ble_gap_conn_desc desc;
+            if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+                ble_store_util_delete_peer(&desc.peer_id_addr);
+            }
+            return BLE_GAP_REPEAT_PAIRING_RETRY;
+        }
+
+        case BLE_GAP_EVENT_PASSKEY_ACTION:
+            // Just Works では PIN 入力不要。何もしない。
+            ESP_LOGI(TAG, "passkey action; action=%d", event->passkey.params.action);
+            return 0;
+
         default:
             return 0;
     }
@@ -281,6 +307,15 @@ void app_main(void) {
 
     ble_hs_cfg.sync_cb  = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
+
+    // BLE ペアリング (Just Works + bonding)。Windows は BLE-MIDI 利用にペアリングを
+    // 要求するため必須。iOS/macOS/Android はペアリングせず接続するので影響なし。
+    ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;   // 入出力なし → Just Works
+    ble_hs_cfg.sm_bonding = 1;                           // ボンド (鍵を保存)
+    ble_hs_cfg.sm_sc = 1;                                // LE Secure Connections
+    ble_hs_cfg.sm_our_key_dist  = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_store_config_init();                             // ボンドを NVS に永続化
 
     // I2C ブリッジ (CH32 デバイスエンジンへの橋渡し) を起動。
     // BT コントローラの割り込み確保と競合しないよう NimBLE 初期化の後に行う。
