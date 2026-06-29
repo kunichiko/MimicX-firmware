@@ -1,7 +1,9 @@
 name: Firmware Release
 
-# タグ v*.*.* を push したときに 3 つの env (joystick / x68k_keyboard / combined)
-# を PlatformIO でビルドし、各 firmware.bin を GitHub Release に添付する。
+# タグ v*.*.* を push したときに:
+#   1. CH32 ファームを 3 variant ぶんビルド (standalone USB 版 + 2チップ I2C 版)
+#   2. その I2C 版を内包した ESP32 (BLE) ファームを 3 variant ぶんビルド
+#   3. すべての bin を GitHub Release に添付し、WebUSB フラッシャー用に Pages へ配備
 #
 # トリガ:
 #   - push tag v*.*.*       : 通常リリース (Release 自動作成)
@@ -16,17 +18,21 @@ on:
   workflow_dispatch:
 
 env:
-  # Node20 ベースの古いアクションを Node24 で動かす互換フラグ。アクション側の
-  # メジャー更新が追いつかない場合の deprecation 警告を抑える。
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  build:
-    name: Build firmware
+  # ---------------------------------------------------------------------------
+  # 1) CH32 ファーム: standalone(USB直) + i2c(2チップ) を variant ごとにビルド
+  # ---------------------------------------------------------------------------
+  build-ch32:
+    name: Build CH32 (${{ matrix.variant }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        env: [joystick, x68k_keyboard, combined]
+        include:
+          - { variant: joystick, std_env: joystick,      i2c_env: joystick-i2c }
+          - { variant: keyboard, std_env: x68k_keyboard, i2c_env: keyboard-i2c }
+          - { variant: combined, std_env: combined,      i2c_env: combined-i2c }
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -50,36 +56,118 @@ jobs:
       - name: Install PlatformIO Core
         run: pip install --upgrade platformio
 
-      - name: Build ${{ matrix.env }}
-        run: pio run -d platforms/ch32x035 -e ${{ matrix.env }}
-
-      - name: Stage firmware artifact
-        id: stage
+      - name: Resolve version
+        id: ver
         run: |
-          mkdir -p dist
-          # タグから v を取った値をバージョンとして埋め込む。タグなしビルド
-          # (PR / workflow_dispatch) では "dev-<sha>" にする。
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           else
-            VERSION="dev-${GITHUB_SHA::7}"
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
-          OUT="dist/mimicx_${{ matrix.env }}_${VERSION}.bin"
-          cp "platforms/ch32x035/.pio/build/${{ matrix.env }}/firmware.bin" "$OUT"
-          echo "out=$OUT" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          ls -la dist/
 
-      - name: Upload artifact
+      - name: Build standalone (${{ matrix.std_env }})
+        run: pio run -d platforms/ch32x035 -e ${{ matrix.std_env }}
+
+      - name: Build I2C (${{ matrix.i2c_env }})
+        run: pio run -d platforms/ch32x035 -e ${{ matrix.i2c_env }}
+
+      - name: Stage CH32 artifacts
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          mkdir -p dist ch32i2c
+          # standalone (USB直) → Release / WebUSB フラッシャー用 (従来名を維持)
+          cp "platforms/ch32x035/.pio/build/${{ matrix.std_env }}/firmware.bin" \
+             "dist/mimicx_${{ matrix.std_env }}_${V}.bin"
+          # i2c 版 → ESP32 ジョブが内包するための受け渡し (生 firmware.bin)
+          cp "platforms/ch32x035/.pio/build/${{ matrix.i2c_env }}/firmware.bin" \
+             "ch32i2c/firmware.bin"
+          ls -la dist/ ch32i2c/
+
+      - name: Upload CH32 standalone (release 用)
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-${{ matrix.env }}
-          path: ${{ steps.stage.outputs.out }}
+          name: firmware-ch32-${{ matrix.variant }}
+          path: dist/*.bin
           if-no-files-found: error
 
+      - name: Upload CH32 i2c (ESP32 内包用 中間成果物)
+        uses: actions/upload-artifact@v7
+        with:
+          name: ch32i2c-${{ matrix.variant }}
+          path: ch32i2c/firmware.bin
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 2) ESP32 ファーム: CH32 i2c 版を内包して variant ごとにビルド (ESP-IDF)
+  # ---------------------------------------------------------------------------
+  build-esp32:
+    name: Build ESP32 (${{ matrix.variant }})
+    needs: build-ch32
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { variant: joystick, embed: ch32_joy_i2c.bin }
+          - { variant: keyboard, embed: ch32_kbd_i2c.bin }
+          - { variant: combined, embed: ch32_combo_i2c.bin }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download CH32 i2c image (${{ matrix.variant }})
+        uses: actions/download-artifact@v6
+        with:
+          name: ch32i2c-${{ matrix.variant }}
+          path: ch32i2c
+
+      - name: Embed CH32 image
+        run: |
+          cp ch32i2c/firmware.bin "platforms/esp32/main/${{ matrix.embed }}"
+          ls -la "platforms/esp32/main/${{ matrix.embed }}"
+
+      - name: Build ESP32 (variant=${{ matrix.variant }}) + merge-bin
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3.5
+          target: esp32
+          path: platforms/esp32
+          command: >-
+            idf.py -DMIMICX_CH32_VARIANT=${{ matrix.variant }} build &&
+            idf.py -DMIMICX_CH32_VARIANT=${{ matrix.variant }} merge-bin -o merged.bin
+
+      - name: Stage ESP32 artifact
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          mkdir -p dist
+          # merge-bin の出力は build/ 内 (0x0 から書ける統合イメージ。esptool / esp-web-tools 用)
+          cp platforms/esp32/build/merged.bin "dist/mimicx-esp32_${{ matrix.variant }}_${V}.bin"
+          # 個別 app バイナリも参考用に同梱
+          cp platforms/esp32/build/mimicx-esp32-ble.bin \
+             "dist/mimicx-esp32_${{ matrix.variant }}_${V}_app.bin" || true
+          ls -la dist/
+
+      - name: Upload ESP32 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-esp32-${{ matrix.variant }}
+          path: dist/*.bin
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3) GitHub Release: CH32 standalone + ESP32 の bin をまとめて添付
+  # ---------------------------------------------------------------------------
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build-ch32, build-esp32]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -87,17 +175,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-        # 注釈付きタグのメッセージを git tag -l --format='%(contents)' で読むため
-        # フル履歴 + タグを取得する。shallow clone だと annotation が取れない場合がある。
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Download all firmware artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v6
         with:
           path: artifacts
-          pattern: firmware-*
+          pattern: firmware-*       # firmware-ch32-* と firmware-esp32-* (中間 ch32i2c-* は除外)
           merge-multiple: true
 
       - name: List artifacts
@@ -105,13 +191,9 @@ jobs:
 
       - name: Extract tag annotation as release body
         id: notes
-        # 注釈付きタグ (git tag -a -m "...") のメッセージをそのまま release body に流す。
-        # Web フラッシャーは Releases API からこの body を読んでバージョン説明として表示する。
-        # 軽量タグ or 注釈が空の場合は generate_release_notes にフォールバック。
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           MSG=$(git tag -l --format='%(contents)' "$TAG")
-          # 末尾の余分な改行を削る
           MSG=$(printf '%s' "$MSG" | sed -e :a -e '/^$/{$d;N;ba' -e '}')
           if [ -z "$MSG" ]; then
             echo "fallback=true" >> "$GITHUB_OUTPUT"
@@ -133,11 +215,11 @@ jobs:
           draft: false
           prerelease: false
 
+  # ---------------------------------------------------------------------------
+  # 4) WebUSB フラッシャー (docs/firmware/firmwares/) へ CH32 standalone bin を配備
+  #    ※ ESP32 用 Web フラッシャーは将来対応 (merged bin は Release から取得可能)
+  # ---------------------------------------------------------------------------
   deploy-to-pages:
-    # Web フラッシャー (docs/firmware/firmwares/) に bin を同一オリジン配備する。
-    # GitHub Release アセットの直 URL は CORS が効かないため、ブラウザの fetch は
-    # 同じ GitHub Pages ドメイン配下 (kunichiko.github.io/...) からの取得が必須。
-    # release job が Releases を作った後で main に bin を commit/push する。
     name: Deploy bins to GitHub Pages
     needs: release
     runs-on: ubuntu-latest
@@ -151,11 +233,11 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Download firmware artifacts
+      - name: Download CH32 standalone artifacts
         uses: actions/download-artifact@v6
         with:
           path: artifacts
-          pattern: firmware-*
+          pattern: firmware-ch32-*
           merge-multiple: true
 
       - name: Stage bins under docs/firmware/firmwares/
