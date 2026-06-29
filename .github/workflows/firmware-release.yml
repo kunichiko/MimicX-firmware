@@ -17,9 +17,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   # ---------------------------------------------------------------------------
   # 1) CH32 ファーム: standalone(USB直) + i2c(2チップ) を variant ごとにビルド
@@ -124,7 +121,7 @@ jobs:
           fi
 
       - name: Download CH32 i2c image (${{ matrix.variant }})
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: ch32i2c-${{ matrix.variant }}
           path: ch32i2c
@@ -180,7 +177,7 @@ jobs:
           fetch-tags: true
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           pattern: firmware-*       # firmware-ch32-* と firmware-esp32-* (中間 ch32i2c-* は除外)
@@ -207,7 +204,7 @@ jobs:
           fi
 
       - name: Create release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*.bin
           body: ${{ steps.notes.outputs.body }}
@@ -234,7 +231,7 @@ jobs:
           fetch-depth: 1
 
       - name: Download CH32 standalone artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           pattern: firmware-ch32-*
