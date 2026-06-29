@@ -15,7 +15,7 @@
 #include "x68k_keyboard.h"
 #include "ch32fun.h"
 #include "funconfig.h"
-#include "../../usb_midi.h"
+#include "../../mimicx_tx.h"
 #include "../x68k_mouse/x68k_mouse.h"
 #include "sharp12_remote.h"
 
@@ -137,7 +137,9 @@ static void forward_target_rx(uint8_t byte) {
         (uint8_t)(byte & 0x0F),
         0xF7,
     };
-    usb_midi_send_sysex(sysex, sizeof(sysex));
+    // USB と (2 チップ構成なら) I2C の両方へ。usb_midi_send_sysex 直送りだと
+    // I2C に乗らず BLE 経由でホスト (LED フィードバック等) に届かない。
+    mimicx_tx(sysex, sizeof(sysex));
 }
 
 // ---------------------------------------------------------------------------

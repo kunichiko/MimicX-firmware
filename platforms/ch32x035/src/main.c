@@ -21,6 +21,7 @@
 #include "ch32fun.h"
 #include "funconfig.h"
 #include "usb_midi.h"
+#include "mimicx_tx.h"
 #include "hid_dispatcher.h"
 #include "board_config.h"
 #include "status_led.h"
@@ -98,7 +99,8 @@ static uint8_t sysex_receiving;
 static void sysex_reset(void) { sysex_len = 0; sysex_receiving = 0; }
 
 // device→host メッセージの送出先。USB-MIDI と (2 チップ構成なら) I2C キューの両方へ。
-static void mimicx_tx(const uint8_t* data, int len) {
+// functions/ 配下からも使えるよう非 static + mimicx_tx.h で公開 (宣言整合のため include)。
+void mimicx_tx(const uint8_t* data, int len) {
     usb_midi_send_sysex(data, len);
 #ifdef MIMICX_I2C
     i2c_midi_enqueue(data, len);
