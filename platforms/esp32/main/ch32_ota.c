@@ -55,15 +55,26 @@ void ch32_ota_check_and_update(void (*rx_cb)(const uint8_t* midi, int len)) {
     ESP_LOGI(TAG, "内包イメージ: %s %d.%d.%d",
              CH32_IMG_NAME, CH32_IMG_MAJ, CH32_IMG_MIN, CH32_IMG_PATCH);
 
-    // 1) IDENTIFY を I2C 同期取得 (F0 7D 01 01 F7)。
+    // 1) IDENTIFY を I2C 同期取得 (F0 7D 01 01 F7)。応答 cmd=0x02 のフレームだけ捕捉
+    //    (古い TARGET_RX 等は読み捨て)。起動直後の CH32 未準備に備えてリトライする。
     static const uint8_t idreq[] = { 0xF0, 0x7D, 0x01, 0x01, 0xF7 };
     uint8_t resp[64];
-    int n = i2c_bridge_request(idreq, sizeof(idreq), resp, sizeof(resp), 500);
+    int n = -1;
+    for (int attempt = 0; attempt < 5; attempt++) {
+        n = i2c_bridge_request(idreq, sizeof(idreq), /*match_cmd=*/0x02,
+                               resp, sizeof(resp), 300);
+        if (n >= 11 && resp[0] == 0xF0 && resp[3] == 0x02) break;
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 
-    // 2) I2C 無応答 → 空チップ/異常とみなし SWD 直書き。
+    // 2) IDENTIFY が取れない場合の分岐:
+    //    - I2C アドレスを ACK する  → 稼働中ファーム (SDI off)。ENTER_SWD ハンドオフで書込
+    //    - ACK しない               → 空チップ/未接続。SWD 直書き (空チップは SDI on)
     if (n < 11 || resp[0] != 0xF0 || resp[3] != 0x02) {
-        ESP_LOGW(TAG, "CH32 が I2C 無応答 (n=%d) - 空チップ等とみなし SWD 直書き", n);
-        do_flash(rx_cb, /*via_handoff=*/false);
+        bool present = i2c_bridge_probe();
+        ESP_LOGW(TAG, "IDENTIFY 取得失敗 (n=%d, addr_ack=%d) - %s",
+                 n, present, present ? "稼働中とみなし ENTER_SWD ハンドオフ書込" : "空チップとみなし SWD 直書き");
+        do_flash(rx_cb, /*via_handoff=*/present);
         return;
     }
 

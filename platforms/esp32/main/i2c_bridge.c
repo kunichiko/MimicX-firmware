@@ -33,6 +33,7 @@ static void (*s_on_rx)(const uint8_t* midi, int len);
 static volatile bool      s_capturing;
 static uint8_t            s_cap_buf[FRAME_MAX];
 static volatile int       s_cap_len;
+static volatile uint8_t   s_cap_match;    // 捕捉したい応答の cmd (SysEx[3])。0=何でも可
 static SemaphoreHandle_t  s_cap_sem;
 
 // host→device: [LEN][MIDI] を CH32 へ書き込む。
@@ -49,10 +50,11 @@ void i2c_bridge_write(const uint8_t* midi, int len) {
 
 // 同期リクエスト: req を送り、CH32 の応答フレーム 1 件を resp に取得する。
 // 戻り値 = 応答バイト数 (>0) / タイムアウト・エラーは <=0。OTA の IDENTIFY 取得に使う。
-int i2c_bridge_request(const uint8_t* req, int reqlen,
+int i2c_bridge_request(const uint8_t* req, int reqlen, uint8_t match_cmd,
                        uint8_t* resp, int respmax, int timeout_ms) {
     if (!s_cap_sem) return -1;
     s_cap_len = 0;
+    s_cap_match = match_cmd;           // この cmd の応答だけ捕捉 (古い TARGET_RX 等はスキップ)
     xSemaphoreTake(s_cap_sem, 0);     // 残留シグナルをクリア
     s_capturing = true;
     i2c_bridge_write(req, reqlen);
@@ -64,6 +66,13 @@ int i2c_bridge_request(const uint8_t* req, int reqlen,
     }
     s_capturing = false;
     return got;
+}
+
+// CH32 (I2C スレーブ) がアドレスを ACK するか。稼働中ファーム判定に使う
+// (空チップ/未接続は ACK しない)。init 後に呼ぶこと。
+bool i2c_bridge_probe(void) {
+    if (!s_bus) return false;
+    return i2c_master_probe(s_bus, CH32_ADDR, 100) == ESP_OK;
 }
 
 // device→host: CH32 から 1 フレーム読む。戻り値 = payload バイト数 (0=データ無し, <0=err)。
@@ -92,7 +101,11 @@ static void reader_task(void *arg) {
             int n = read_one_frame(midi, sizeof(midi));
             if (n <= 0) break;                          // 0=空, <0=err
             if (s_capturing) {
-                if (s_cap_len == 0) {                   // 最初の 1 フレームだけ捕捉
+                // 期待する応答 (SysEx かつ cmd==s_cap_match) のフレームだけ捕捉。
+                // 古い device→host フレーム (TARGET_RX 0x05 等) は読み捨てて待ち続ける。
+                bool match = (s_cap_match == 0) ||
+                             (n >= 4 && midi[0] == 0xF0 && midi[3] == s_cap_match);
+                if (s_cap_len == 0 && match) {
                     memcpy(s_cap_buf, midi, n);
                     s_cap_len = n;
                     if (s_cap_sem) xSemaphoreGive(s_cap_sem);

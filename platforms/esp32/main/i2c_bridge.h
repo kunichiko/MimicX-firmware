@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 
 // I2C マスターと INT 受信タスクを起動する。
 //   on_rx: device→host の 1 メッセージ受信ごとに呼ばれる。
@@ -24,6 +25,11 @@ void i2c_bridge_write(const uint8_t* midi, int len);
 void i2c_bridge_deinit(void);
 
 // 同期リクエスト: req (MIDI/SysEx バイト列) を送り、CH32 の応答 1 件を resp へ取得する。
+// match_cmd != 0 のとき、SysEx の cmd (4 バイト目) が match_cmd に一致する応答だけを
+// 捕捉し、それ以外の device→host フレーム (TARGET_RX 等) は読み捨てる。0 なら最初の 1 件。
 // OTA の IDENTIFY 取得用。戻り値 = 応答バイト数 (>0)、タイムアウト/エラーは <=0。
-int i2c_bridge_request(const uint8_t* req, int reqlen,
+int i2c_bridge_request(const uint8_t* req, int reqlen, uint8_t match_cmd,
                        uint8_t* resp, int respmax, int timeout_ms);
+
+// CH32 (I2C スレーブ) がアドレスを ACK するか。稼働中ファーム=true / 空チップ・未接続=false。
+bool i2c_bridge_probe(void);

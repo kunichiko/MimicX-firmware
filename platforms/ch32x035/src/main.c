@@ -43,7 +43,7 @@
 #define PROTOCOL_VERSION_MINOR  7  // 0.7: serial / SET_LED / SET_LED_BLINK / HEART_BEAT を追加
 #define FW_VERSION_MAJOR  0
 #define FW_VERSION_MINOR  9
-#define FW_VERSION_PATCH  1   // 0.9.1 (ESP32 SMP ボンディング対応リリースに合わせて版上げ)
+#define FW_VERSION_PATCH  2   // 0.9.2 (x68k キーボード device→host を I2C にも流す修正)
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15
