@@ -26,5 +26,11 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # BLE スタックを core0 に固定し、core1 を I2C ブリッジ (reader task 等) に空ける。
 CONFIG_BT_NIMBLE_PINNED_TO_CORE_0=y
 CONFIG_BT_CTRL_PINNED_TO_CORE_0=y
-# CPU を 240MHz にして BLE⇄I2C 中継のレイテンシを下げる。
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# CPU は 160MHz。RF フル校正時の消費電流ピークを抑え、電源マージンが薄い基板でも
+# ブラウンアウトしにくくする (240MHz だと校正中に電圧降下→リセットが起きる個体あり)。
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+
+# --- 電源マージン対策 ---
+# ブラウンアウト検出を無効化。電源が一瞬沈んでもリセットせず RF 校正を完走させる
+# (校正が一度通れば NVS にキャッシュされ以後は軽い)。供給が極端に弱い場合は別途要強化。
+CONFIG_ESP_BROWNOUT_DET=n
