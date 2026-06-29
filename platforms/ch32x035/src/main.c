@@ -41,8 +41,8 @@
 #define PROTOCOL_VERSION_MAJOR  0
 #define PROTOCOL_VERSION_MINOR  7  // 0.7: serial / SET_LED / SET_LED_BLINK / HEART_BEAT を追加
 #define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  8
-#define FW_VERSION_PATCH  2   // 0.8.2: 2チップ構成の CMD_ENTER_SWD (SWD OTA) 追加
+#define FW_VERSION_MINOR  9
+#define FW_VERSION_PATCH  0   // 0.9.0: 2チップ構成 (MIDI-over-I2C スレーブ + SWD OTA) 対応
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15

@@ -51,7 +51,7 @@ static const char *TAG = "mimicx";
 #define BRIDGE_PROTO_MAJOR  0
 #define BRIDGE_PROTO_MINOR  8   // ブリッジが実装する phone 側プロトコル (0.8)
 #define BRIDGE_FW_MAJOR     0
-#define BRIDGE_FW_MINOR     1
+#define BRIDGE_FW_MINOR     9
 #define BRIDGE_FW_PATCH     0
 
 #define SYSEX_MFR_ID            0x7D

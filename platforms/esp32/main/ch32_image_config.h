@@ -23,22 +23,22 @@
 #if defined(MIMICX_CH32_JOYSTICK)
   #define CH32_IMG_NAME  "mimic-x-joy"
   #define CH32_IMG_MAJ   0
-  #define CH32_IMG_MIN   8
-  #define CH32_IMG_PATCH 2
+  #define CH32_IMG_MIN   9
+  #define CH32_IMG_PATCH 0
   extern const uint8_t ch32_img_start[] asm("_binary_ch32_joy_i2c_bin_start");
   extern const uint8_t ch32_img_end[]   asm("_binary_ch32_joy_i2c_bin_end");
 #elif defined(MIMICX_CH32_KEYBOARD)
   #define CH32_IMG_NAME  "mimic-x-x68k"
   #define CH32_IMG_MAJ   0
-  #define CH32_IMG_MIN   8
-  #define CH32_IMG_PATCH 2
+  #define CH32_IMG_MIN   9
+  #define CH32_IMG_PATCH 0
   extern const uint8_t ch32_img_start[] asm("_binary_ch32_kbd_i2c_bin_start");
   extern const uint8_t ch32_img_end[]   asm("_binary_ch32_kbd_i2c_bin_end");
 #elif defined(MIMICX_CH32_COMBINED)
   #define CH32_IMG_NAME  "mimic-x-combo"
   #define CH32_IMG_MAJ   0
-  #define CH32_IMG_MIN   8
-  #define CH32_IMG_PATCH 2
+  #define CH32_IMG_MIN   9
+  #define CH32_IMG_PATCH 0
   extern const uint8_t ch32_img_start[] asm("_binary_ch32_combo_i2c_bin_start");
   extern const uint8_t ch32_img_end[]   asm("_binary_ch32_combo_i2c_bin_end");
 #else
