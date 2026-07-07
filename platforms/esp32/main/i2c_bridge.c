@@ -11,12 +11,14 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
+#include "board_config.h"
+
 static const char *TAG = "i2c_bridge";
 
-// --- 配線 (暫定。基板に合わせて変更可) ---
-#define I2C_SDA_GPIO   GPIO_NUM_21
-#define I2C_SCL_GPIO   GPIO_NUM_22
-#define I2C_INT_GPIO   GPIO_NUM_19      // CH32 PB1(INT) ← 入力
+// --- 配線 (ボード別。ピンは board_config.h で切替) ---
+#define I2C_SDA_GPIO   BOARD_I2C_SDA_GPIO
+#define I2C_SCL_GPIO   BOARD_I2C_SCL_GPIO
+#define I2C_INT_GPIO   BOARD_I2C_INT_GPIO   // CH32 PB1(INT) ← 入力
 #define CH32_ADDR      0x33
 #define I2C_HZ         400000
 
