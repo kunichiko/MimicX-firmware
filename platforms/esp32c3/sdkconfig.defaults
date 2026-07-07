@@ -1,0 +1,34 @@
+# ===================================================================================
+# MimicX-ESP32-C3 (Seeed XIAO ESP32-C3) sdkconfig 既定値
+# (idf.py が初回に sdkconfig へ展開する。sdkconfig 自体は git 管理外)
+#
+# platforms/esp32c6/sdkconfig.defaults とほぼ同一 (どちらもシングル HP コアの RISC-V)。
+#   - ESP32 classic コントローラ専用の設定 (CONFIG_BT_CTRL_*) は無いため指定しない
+#   - コア固定 (PINNED_TO_CORE) は指定しない
+#   - XIAO は USB-C 直結 (UART ブリッジ無し) なのでログ/コンソールを USB Serial/JTAG へ
+# ===================================================================================
+
+# --- Bluetooth: NimBLE (peripheral) を使用、Bluedroid は無効 ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="MimicX"
+
+# BLE-MIDI の SysEx 分割を減らすため MTU を拡張 (§2.3)
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+
+# --- BLE ペアリング/ボンディング (Windows BLE-MIDI はペアリング必須) ---
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# --- ログ / コンソール ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# XIAO ESP32-C3 は USB-C を直接 SoC の USB Serial/JTAG に接続 (外部 UART ブリッジ無し)。
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

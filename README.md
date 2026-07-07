@@ -16,6 +16,7 @@
 | CH32X035 (有線) | [`platforms/ch32x035/`](platforms/ch32x035/) | USB-MIDI | PlatformIO (`pio run -e ...`) |
 | ESP32-WROOM-32 (無線) | [`platforms/esp32/`](platforms/esp32/) | BLE-MIDI | ESP-IDF (`idf.py`) |
 | Seeed XIAO ESP32-C6 (無線) | [`platforms/esp32c6/`](platforms/esp32c6/) | BLE-MIDI | ESP-IDF (`idf.py`, RISC-V) |
+| Seeed XIAO ESP32-C3 (無線) | [`platforms/esp32c3/`](platforms/esp32c3/) | BLE-MIDI | ESP-IDF (`idf.py`, RISC-V) |
 | 共有コード (MCU 非依存) | [`platforms/common/`](platforms/common/) | — | 各ビルドから参照 |
 
 `platforms/common/mimicx_hid/` に `hid_function.h` (vtable インターフェース) と
