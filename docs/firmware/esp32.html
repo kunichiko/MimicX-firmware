@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mimic X (ESP32 無線版) Firmware Update</title>
+    <title>Mimic X (無線版 ESP32 / XIAO C6) Firmware Update</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -49,12 +49,14 @@
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
 </head>
 <body>
-    <h1>Mimic X 無線版 (ESP32) Firmware Update</h1>
+    <h1>Mimic X 無線版 (ESP32 / XIAO C6) Firmware Update</h1>
 
     <p>
-        Mimic X ワイヤレスアダプタ (ESP32-WROOM-32 + CH32X035 の 2 チップ構成) の
-        ESP32 側ファームウェアを Web ブラウザから書き込むページです。
-        ESP32 ファームは対応する CH32 ファームを内包しており、起動時に CH32 を自動同期します。
+        Mimic X ワイヤレスアダプタ (ESP32 系 + CH32X035 の 2 チップ構成) の
+        無線側ファームウェアを Web ブラウザから書き込むページです。
+        <strong>ESP32-WROOM-32</strong> と <strong>Seeed XIAO ESP32-C6</strong> の両対応で、
+        接続したボードを自動判別して対応イメージを書き込みます。
+        無線ファームは対応する CH32 ファームを内包しており、起動時に CH32 を自動同期します。
         プロジェクト: <a href="https://github.com/kunichiko/MimicX-firmware" target="_blank" rel="noopener">MimicX-firmware</a><br>
         CH32 単体 (USB 直結版) の書き込みは <a href="./index.html">こちら (WebUSB フラッシャー)</a>。
     </p>
@@ -62,17 +64,17 @@
     <div class="section">
         <h3>準備</h3>
         <div class="steps">
-            <div class="step">ESP32 ボードを USB ケーブルで PC に接続する (BOOT 操作は不要。esptool が自動でブートローダへ入れます)</div>
+            <div class="step">ボードを USB ケーブルで PC に接続する (BOOT 操作は不要。esptool が自動でブートローダへ入れます)</div>
             <div class="step">基板に合うバリアントとバージョンを選択する</div>
-            <div class="step">「CONNECT」ボタンを押し、シリアルポート (CP210x / CH340 等) を選択する</div>
-            <div class="step">「INSTALL」を押して書き込む (フラッシュ全体を上書きします)</div>
+            <div class="step">「CONNECT」ボタンを押し、シリアルポートを選択する (ESP32 は CP210x / CH340 等、XIAO C6 は USB シリアル)</div>
+            <div class="step">「INSTALL」を押して書き込む (接続チップを自動判別。フラッシュ全体を上書きします)</div>
         </div>
         <div class="warning">
             Web Serial 対応の Chromium 系ブラウザ (Chrome / Edge) が必要です。Safari / Firefox は非対応です。
         </div>
         <div class="warning">
-            これは <strong>ESP32</strong> 用です。CH32 単体 (USB 直結) のアダプタには使えません
-            (その場合は <a href="./index.html">CH32 用フラッシャー</a> を使用)。
+            これは <strong>無線版 (ESP32 / XIAO ESP32-C6)</strong> 用です。CH32 単体 (USB 直結) の
+            アダプタには使えません (その場合は <a href="./index.html">CH32 用フラッシャー</a> を使用)。
         </div>
     </div>
 
@@ -107,12 +109,20 @@
             combined: '全機能 (ジョイスティック + X68000 キーボード/マウス) 同居バリアント。',
         };
 
-        // { [variant]: [{ version, date, url(absolute), note }, ...] }  新しい順
+        // esp-web-tools の chipFamily 名 (接続チップに応じて自動選択される)
+        const CHIP_FAMILY = { esp32: 'ESP32', esp32c6: 'ESP32-C6' };
+        const BOARD_LABEL = { esp32: 'ESP32-WROOM-32', esp32c6: 'XIAO ESP32-C6' };
+
+        // { [variant]: [{ version, date, note, urls:{esp32?,esp32c6?} }, ...] }  新しい順
         const VARIANTS = { joystick: [], keyboard: [], combined: [] };
         const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
 
-        // ESP32 の merged イメージ (offset 0x0) アセット名規約:
-        //   mimicx-esp32_<variant>_v<version>.bin   (..._app.bin は app 単体なので除外)
+        // 無線 merged イメージ (offset 0x0) アセット名規約:
+        //   mimicx-esp32_<variant>_v<ver>.bin    (ESP32-WROOM-32, Xtensa)
+        //   mimicx-esp32c6_<variant>_v<ver>.bin  (XIAO ESP32-C6, RISC-V)
+        //   (..._app.bin は app 単体なので除外)
+        // 同一 version の両ボードを 1 エントリにまとめ、manifest に両 build を載せる
+        // → esp-web-tools が接続チップを判定して正しい bin を書く。
         // CH32 と同様、CORS の都合で bin は同一オリジン (docs/firmware/firmwares/) から取得する。
         async function initVariants() {
             const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
@@ -122,17 +132,19 @@
                 const date = (rel.published_at || '').slice(0, 10);
                 const note = (rel.body || '').trim();
                 for (const a of rel.assets || []) {
-                    const m = /^mimicx-esp32_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
+                    // esp32c6 を先に判定 (esp32 が前方一致してしまうため)
+                    const m = /^mimicx-(esp32c6|esp32)_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
                     if (!m) continue;
-                    const variant = m[1];
+                    const board = m[1];      // 'esp32' | 'esp32c6'
+                    const variant = m[2];
                     if (!VARIANTS[variant]) continue;
-                    VARIANTS[variant].push({
-                        version: rel.tag_name,
-                        date,
-                        // 絶対 URL (manifest が blob: URL のため相対解決できない)
-                        url: new URL(`firmwares/${a.name}`, location.href).href,
-                        note,
-                    });
+                    let entry = VARIANTS[variant].find(e => e.version === rel.tag_name);
+                    if (!entry) {
+                        entry = { version: rel.tag_name, date, note, urls: {} };
+                        VARIANTS[variant].push(entry);
+                    }
+                    // 絶対 URL (manifest が blob: URL のため相対解決できない)
+                    entry.urls[board] = new URL(`firmwares/${a.name}`, location.href).href;
                 }
             }
         }
@@ -153,13 +165,16 @@
         // 選択中 variant/version から esp-web-tools manifest を組み立て、blob URL を
         // install ボタンへ割り当てる。parts[].path は絶対 URL を使う。
         function setManifest(variant, rel) {
+            // 利用可能なボードぶんの build を並べる。接続チップに応じ esp-web-tools が選択。
+            const builds = Object.entries(rel.urls).map(([board, url]) => ({
+                chipFamily: CHIP_FAMILY[board],
+                parts: [{ path: url, offset: 0 }],
+            }));
             const manifest = {
-                name: `MimicX ESP32 (${variant})`,
+                name: `MimicX 無線 (${variant})`,
                 version: rel.version,
                 new_install_prompt_erase: true,
-                builds: [
-                    { chipFamily: 'ESP32', parts: [{ path: rel.url, offset: 0 }] },
-                ],
+                builds,
             };
             const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
             installBtn.manifest = URL.createObjectURL(blob);
@@ -177,8 +192,9 @@
                 const opt = document.createElement('option');
                 opt.value = r.version;
                 opt.dataset.note = r.note || '';
-                opt.dataset.url = r.url;
-                opt.textContent = `${r.version} (${r.date})`;
+                // 対応ボードを版名に併記 (例: v0.9.3 (2026-07-07) [ESP32 / XIAO C6])
+                const boards = Object.keys(r.urls).map(b => (b === 'esp32c6' ? 'XIAO C6' : 'ESP32')).join(' / ');
+                opt.textContent = `${r.version} (${r.date}) [${boards}]`;
                 firmwareSelect.appendChild(opt);
             }
             firmwareSelect.disabled = releases.length === 0;
@@ -202,9 +218,9 @@
             const rel = (VARIANTS[v] || []).find(r => r.version === ver);
             if (!rel) return;
             firmwareNote.textContent = rel.note || '';
-            firmwareSize.textContent = `イメージ: ${rel.url.split('/').pop()}`;
+            firmwareSize.textContent = `対応ボード: ${Object.keys(rel.urls).map(b => BOARD_LABEL[b]).join(' / ')}`;
             setManifest(v, rel);
-            setStatus('「CONNECT」を押して ESP32 のシリアルポートを選択してください');
+            setStatus('「CONNECT」を押してボードのシリアルポートを選択してください');
         });
 
         (async () => {

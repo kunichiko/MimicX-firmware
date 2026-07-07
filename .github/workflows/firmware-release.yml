@@ -2,7 +2,8 @@ name: Firmware Release
 
 # タグ v*.*.* を push したときに:
 #   1. CH32 ファームを 3 variant ぶんビルド (standalone USB 版 + 2チップ I2C 版)
-#   2. その I2C 版を内包した ESP32 (BLE) ファームを 3 variant ぶんビルド
+#   2. その I2C 版を内包した無線ファームを board × variant でビルド
+#      (board = esp32 / esp32c6、variant = joystick / keyboard / combined → 計 6)
 #   3. すべての bin を GitHub Release に添付し、WebUSB フラッシャー用に Pages へ配備
 #
 # トリガ:
@@ -95,14 +96,22 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # 2) ESP32 ファーム: CH32 i2c 版を内包して variant ごとにビルド (ESP-IDF)
+  # 2) ESP32 系 (無線) ファーム: CH32 i2c 版を内包して board × variant でビルド。
+  #    board = esp32 (WROOM DevKit, Xtensa) / esp32c6 (XIAO, RISC-V)。ソースは
+  #    platforms/esp32/main を共有し、C6 は platforms/esp32c6 プロジェクトから参照。
+  #    esp-idf-ci-action の Docker は両アーキのツールチェーンを内蔵するので target
+  #    を切り替えるだけでよい。
   # ---------------------------------------------------------------------------
   build-esp32:
-    name: Build ESP32 (${{ matrix.variant }})
+    name: Build ${{ matrix.board.prefix }} (${{ matrix.variant }})
     needs: build-ch32
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        variant: [joystick, keyboard, combined]
+        board:
+          - { target: esp32,   path: platforms/esp32,   prefix: mimicx-esp32,   app: mimicx-esp32-ble.bin }
+          - { target: esp32c6, path: platforms/esp32c6, prefix: mimicx-esp32c6, app: mimicx-esp32c6-ble.bin }
         include:
           - { variant: joystick, embed: ch32_joy_i2c.bin }
           - { variant: keyboard, embed: ch32_kbd_i2c.bin }
@@ -128,34 +137,36 @@ jobs:
 
       - name: Embed CH32 image
         run: |
+          # 内包イメージは共有コンポーネント platforms/esp32/main に置く (esp32 / esp32c6 共通)。
           cp ch32i2c/firmware.bin "platforms/esp32/main/${{ matrix.embed }}"
           ls -la "platforms/esp32/main/${{ matrix.embed }}"
 
-      - name: Build ESP32 (variant=${{ matrix.variant }}) + merge-bin
+      - name: Build ${{ matrix.board.target }} (variant=${{ matrix.variant }}) + merge-bin
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v5.3.5
-          target: esp32
-          path: platforms/esp32
+          target: ${{ matrix.board.target }}
+          path: ${{ matrix.board.path }}
           command: >-
             idf.py -DMIMICX_CH32_VARIANT=${{ matrix.variant }} build &&
             idf.py -DMIMICX_CH32_VARIANT=${{ matrix.variant }} merge-bin -o merged.bin
 
-      - name: Stage ESP32 artifact
+      - name: Stage artifact
         run: |
           V="${{ steps.ver.outputs.version }}"
+          P="${{ matrix.board.path }}"
           mkdir -p dist
           # merge-bin の出力は build/ 内 (0x0 から書ける統合イメージ。esptool / esp-web-tools 用)
-          cp platforms/esp32/build/merged.bin "dist/mimicx-esp32_${{ matrix.variant }}_${V}.bin"
+          cp "$P/build/merged.bin" "dist/${{ matrix.board.prefix }}_${{ matrix.variant }}_${V}.bin"
           # 個別 app バイナリも参考用に同梱
-          cp platforms/esp32/build/mimicx-esp32-ble.bin \
-             "dist/mimicx-esp32_${{ matrix.variant }}_${V}_app.bin" || true
+          cp "$P/build/${{ matrix.board.app }}" \
+             "dist/${{ matrix.board.prefix }}_${{ matrix.variant }}_${V}_app.bin" || true
           ls -la dist/
 
-      - name: Upload ESP32 artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-esp32-${{ matrix.variant }}
+          name: firmware-${{ matrix.board.prefix }}-${{ matrix.variant }}
           path: dist/*.bin
           if-no-files-found: error
 
@@ -240,8 +251,8 @@ jobs:
       - name: Stage bins under docs/firmware/firmwares/
         run: |
           mkdir -p docs/firmware/firmwares
-          # CH32 standalone (mimicx_*) と ESP32 merged (mimicx-esp32_*) を同一オリジン配備。
-          # ESP32 app 単体 (*_app.bin) は Web フラッシャーで使わないので除外 (Release のみ)。
+          # CH32 standalone (mimicx_*) と 無線 merged (mimicx-esp32_* / mimicx-esp32c6_*) を
+          # 同一オリジン配備。app 単体 (*_app.bin) は Web フラッシャーで使わないので除外 (Release のみ)。
           for f in artifacts/*.bin; do
             case "$(basename "$f")" in
               *_app.bin) ;;
