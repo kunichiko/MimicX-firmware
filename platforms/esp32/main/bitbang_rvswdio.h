@@ -83,7 +83,7 @@ struct SWIOState
 
 #define IRAM IRAM_ATTR
 
-#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32_RISCV)
 // You may need to rewrite, depending on your architecture.
 static inline void Send1BitSWIO( int t1coeff, int pinmaskD ) IRAM;
 static inline void Send0BitSWIO( int t1coeff, int pinmaskD ) IRAM;
@@ -153,13 +153,13 @@ extern int ch5xx_write_flash_using_microblob(struct SWIOState * iss, uint32_t st
 #define CR_BUF_RST                 ((uint32_t)0x00080000)
 #endif
 
-#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32_RISCV)
 
 // --- GPIO アクセスのアーキ中立化 ---------------------------------------------
 // ESP32(Xtensa) は従来どおり GPIO 構造体を直叩き (生成コードは元と同一)。
-// ESP32-C6(RISC-V) は構造体レイアウトが異なるため REG_WRITE/READ (アドレス固定)
-// を使う。どちらも SWDIO/SWCLK は GPIO0-31 の範囲なので単一レジスタで扱える。
-#if defined(RUNNING_ON_ESP32C6)
+// RISC-V (ESP32-C3 / C6 等) は構造体レイアウトが異なるため REG_WRITE/READ (アドレス
+// 固定) を使う。どちらも SWDIO/SWCLK は GPIO0-31 の範囲なので単一レジスタで扱える。
+#if defined(RUNNING_ON_ESP32_RISCV)
 #define BB_OUT_SET(m)  REG_WRITE(GPIO_OUT_W1TS_REG,    (m))
 #define BB_OUT_CLR(m)  REG_WRITE(GPIO_OUT_W1TC_REG,    (m))
 #define BB_OE_SET(m)   REG_WRITE(GPIO_ENABLE_W1TS_REG, (m))
@@ -173,7 +173,7 @@ extern int ch5xx_write_flash_using_microblob(struct SWIOState * iss, uint32_t st
 #define BB_IN()        (GPIO.in)
 #endif
 
-#if defined(RUNNING_ON_ESP32C6)
+#if defined(RUNNING_ON_ESP32_RISCV)
 // RISC-V には Xtensa の bbci が無い。単純な volatile ビジーループで代替する。
 // 1 反復あたりの絶対時間は Xtensa 版と異なるが、ch32_swd.c 側の t1coeff スイープ
 // ({10,5,20,40}) が実機で合う係数を探すため、単調増加であれば足りる。
@@ -512,7 +512,7 @@ static int InitializeSWDSWIO( struct SWIOState * state )
 {
 	for( int timeout = 20; timeout; timeout-- )
 	{
-#if !defined(RUNNING_ON_ESP32) && !defined(RUNNING_ON_ESP32C6)
+#if !defined(RUNNING_ON_ESP32) && !defined(RUNNING_ON_ESP32_RISCV)
 		BB_PRINTF_DEBUG( "CFG FOR RV\n" );
 		ConfigureIOForRVSWIO();
 		BB_PRINTF_DEBUG( "DONE CFG FOR RV\n" );
@@ -540,7 +540,7 @@ static int InitializeSWDSWIO( struct SWIOState * state )
 			return 0;
 		}
 
-#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32_RISCV)
 		BB_OUT_SET(state->pinmaskC);
 		BB_OE_SET(state->pinmaskC);
 #else

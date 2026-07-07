@@ -29,6 +29,16 @@
 #define BOARD_ANT_RF_ENABLE_GPIO 3    // Low で RF スイッチに給電
 #define BOARD_ANT_SELECT_GPIO    14   // Low=オンボード / High=外部(U.FL)
 
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+// --- Seeed Studio XIAO ESP32-C3 ---
+//   D4=GPIO6(SDA), D5=GPIO7(SCL), D3=GPIO5(空き) を使用。
+//   アンテナは U.FL 外付けのみ (オンボード無し / RF スイッチ無し) なので初期化不要。
+#define BOARD_I2C_SDA_GPIO   6    // D4
+#define BOARD_I2C_SCL_GPIO   7    // D5
+#define BOARD_I2C_INT_GPIO   5    // D3  (CH32 PB1 INT ← 入力)
+#define BOARD_SWDIO_GPIO     6    // = SDA (CH32 PC18)
+#define BOARD_SWCLK_GPIO     7    // = SCL (CH32 PC19)
+
 #else
 // --- ESP32-WROOM-32 DevKit (既定) ---
 #define BOARD_I2C_SDA_GPIO   21

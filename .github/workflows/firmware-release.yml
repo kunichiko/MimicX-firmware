@@ -3,7 +3,7 @@ name: Firmware Release
 # タグ v*.*.* を push したときに:
 #   1. CH32 ファームを 3 variant ぶんビルド (standalone USB 版 + 2チップ I2C 版)
 #   2. その I2C 版を内包した無線ファームを board × variant でビルド
-#      (board = esp32 / esp32c6、variant = joystick / keyboard / combined → 計 6)
+#      (board = esp32 / esp32c6 / esp32c3、variant = joystick / keyboard / combined → 計 9)
 #   3. すべての bin を GitHub Release に添付し、WebUSB フラッシャー用に Pages へ配備
 #
 # トリガ:
@@ -112,6 +112,7 @@ jobs:
         board:
           - { target: esp32,   path: platforms/esp32,   prefix: mimicx-esp32,   app: mimicx-esp32-ble.bin }
           - { target: esp32c6, path: platforms/esp32c6, prefix: mimicx-esp32c6, app: mimicx-esp32c6-ble.bin }
+          - { target: esp32c3, path: platforms/esp32c3, prefix: mimicx-esp32c3, app: mimicx-esp32c3-ble.bin }
         include:
           - { variant: joystick, embed: ch32_joy_i2c.bin }
           - { variant: keyboard, embed: ch32_kbd_i2c.bin }
