@@ -76,6 +76,13 @@
             これは <strong>無線版 (ESP32 / XIAO ESP32-C6 / XIAO ESP32-C3)</strong> 用です。CH32 単体
             (USB 直結) のアダプタには使えません (その場合は <a href="./index.html">CH32 用フラッシャー</a> を使用)。
         </div>
+        <div class="warning">
+            ⚠ <strong>XIAO ESP32-C3 / C6 など内蔵USB (Serial/JTAG) の機種</strong>: 書き込み完了 (100%) の
+            直後にブラウザがクラッシュすることがあります。これは書き込み後のリセットで USB デバイスが
+            再列挙する際のブラウザ側の不具合で、<strong>書き込み自体は成功しています</strong> (挿し直せば
+            新ファームで起動します)。USB-UART ブリッジ搭載の ESP32 DevBoard では発生しません。気になる場合は
+            <code>idf.py flash</code> でのネイティブ書き込みをご利用ください。
+        </div>
     </div>
 
     <div class="section">
