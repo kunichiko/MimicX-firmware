@@ -8,27 +8,41 @@
 #include "esp_rom_sys.h"
 #include "esp_cpu.h"
 #include "soc/gpio_struct.h"
+#include "soc/gpio_reg.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+
+#include "board_config.h"
 
 static const char *TAG = "ch32_swd";
 
-// bitbang_rvswdio.h は GPIO 構造体直叩き + xtensa PrecDelay を使う ESP32 実装を内蔵。
-// 以下のシンボルを与えてから include する。
-//   DisableISR/EnableISR: ビットバング中の割り込みを止めてタイミングを守る
-//   (cookbook と同じく xtensa の割り込みレベル操作)。
+// bitbang_rvswdio.h は ESP32(Xtensa) 実装を内蔵する。GPIO アクセスと PrecDelay /
+// 割り込み制御はアーキ依存なので、下記シンボルを与えてから include する。
+//   DisableISR/EnableISR: ビットバング中の割り込みを止めてタイミングを守る。
+#if defined(CONFIG_IDF_TARGET_ESP32)
+// Xtensa: cookbook と同じく割り込みレベルを直接操作。
 #include "xtensa/xtruntime.h"
 #define DisableISR()  XTOS_SET_INTLEVEL(XCHAL_EXCM_LEVEL)
 #define EnableISR()   XTOS_SET_INTLEVEL(0)
-
 #define RUNNING_ON_ESP32
+#else
+// RISC-V (ESP32-C6 等): xtensa 割り込みレベル API が無いため、portMUX の
+// クリティカルセクション (割り込み無効 + スピンロック) でタイミングを守る。
+// SWD 書込は起動時 (BLE 接続前) の一過性処理なので短時間の割り込み停止は許容。
+static portMUX_TYPE s_swd_mux = portMUX_INITIALIZER_UNLOCKED;
+#define DisableISR()  portENTER_CRITICAL(&s_swd_mux)
+#define EnableISR()   portEXIT_CRITICAL(&s_swd_mux)
+#define RUNNING_ON_ESP32C6
+#endif
+
 #define BB_PRINTF_DEBUG(...) do{}while(0)
 #define MAX_IN_TIMEOUT 1000     // ビット読み出しのタイムアウト (cookbook 準拠)
 #include "bitbang_rvswdio.h"
 
-// 配線: SWDIO=GPIO21 (CH32 PC18 と結線), SWCLK=GPIO22 (CH32 PC19 と結線)。
-#define SWDIO_PIN 21
-#define SWCLK_PIN 22
+// 配線: SWDIO=SDA線 (CH32 PC18), SWCLK=SCL線 (CH32 PC19)。ピンは board_config.h。
+#define SWDIO_PIN BOARD_SWDIO_GPIO
+#define SWCLK_PIN BOARD_SWCLK_GPIO
 
 static bool try_probe_once(int t1coeff, bool pullup, uint32_t *chip_type_out)
 {
@@ -46,8 +60,8 @@ static bool try_probe_once(int t1coeff, bool pullup, uint32_t *chip_type_out)
     gpio_set_direction(SWCLK_PIN, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_pull_mode(SWDIO_PIN, pullup ? GPIO_PULLUP_ONLY : GPIO_FLOATING);
     gpio_set_pull_mode(SWCLK_PIN, pullup ? GPIO_PULLUP_ONLY : GPIO_FLOATING);
-    GPIO.out_w1ts    = s.pinmaskD | s.pinmaskC;
-    GPIO.enable_w1ts = s.pinmaskD | s.pinmaskC;
+    BB_OUT_SET(s.pinmaskD | s.pinmaskC);
+    BB_OE_SET(s.pinmaskD | s.pinmaskC);
 
     if (InitializeSWDSWIO(&s) != 0) return false;
     ESP_LOGI(TAG, "  link up! t1coeff=%d pullup=%d opmode=%d", t1coeff, pullup, s.opmode);
@@ -85,8 +99,8 @@ static bool link_up(struct SWIOState *s)
     gpio_set_direction(SWCLK_PIN, GPIO_MODE_INPUT_OUTPUT);
     gpio_set_pull_mode(SWDIO_PIN, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(SWCLK_PIN, GPIO_PULLUP_ONLY);
-    GPIO.out_w1ts    = s->pinmaskD | s->pinmaskC;
-    GPIO.enable_w1ts = s->pinmaskD | s->pinmaskC;
+    BB_OUT_SET(s->pinmaskD | s->pinmaskC);
+    BB_OE_SET(s->pinmaskD | s->pinmaskC);
 
     if (InitializeSWDSWIO(s) != 0) { ESP_LOGW(TAG, "link init failed"); return false; }
     if (DetermineChipTypeAndSectorInfo(s, NULL) != 0) { ESP_LOGW(TAG, "chip detect failed"); return false; }

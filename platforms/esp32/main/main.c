@@ -43,6 +43,11 @@
 #include "i2c_bridge.h"
 #include "ch32_swd.h"
 #include "ch32_ota.h"
+#include "board_config.h"
+
+#if defined(BOARD_HAS_ANTENNA_SWITCH)
+#include "driver/gpio.h"
+#endif
 
 // NimBLE のボンド永続化ストア (NVS)。ESP-IDF が提供 (ヘッダが include パスに無いため
 // 前方宣言する。ESP-IDF の NimBLE 例と同じ書き方)。
@@ -72,6 +77,29 @@ static const char *TAG = "mimicx";
 static uint8_t g_addr_type;
 
 static void start_advertising(void);
+
+// ---------------------------------------------------------------------------
+// ボード早期初期化: XIAO ESP32-C6 のアンテナ RF スイッチ設定 (§board_config.h)。
+// オンボードセラミックアンテナを使うには GPIO3=Low (RF スイッチ給電) + GPIO14=Low
+// (オンボード選択) を出力する。未設定だと BLE の電波が極端に弱くなるため、無線を
+// 立ち上げる前 (app_main 冒頭) に行う。ESP32 DevKit では no-op。
+// ---------------------------------------------------------------------------
+static void board_early_init(void) {
+#if defined(BOARD_HAS_ANTENNA_SWITCH)
+    gpio_config_t io = {
+        .pin_bit_mask = (1ULL << BOARD_ANT_RF_ENABLE_GPIO) | (1ULL << BOARD_ANT_SELECT_GPIO),
+        .mode         = GPIO_MODE_OUTPUT,
+        .pull_up_en   = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    gpio_set_level(BOARD_ANT_RF_ENABLE_GPIO, 0);   // RF スイッチに給電
+    gpio_set_level(BOARD_ANT_SELECT_GPIO, 0);      // オンボードアンテナを選択
+    ESP_LOGI(TAG, "XIAO C6 antenna: onboard (RF_EN=GPIO%d SEL=GPIO%d)",
+             BOARD_ANT_RF_ENABLE_GPIO, BOARD_ANT_SELECT_GPIO);
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // serial[16]: ESP32 base MAC (6 byte) を 8 byte に 0 埋めして 16 ASCII hex 化。
@@ -286,6 +314,8 @@ static void host_task(void *param) {
 // エントリポイント
 // ---------------------------------------------------------------------------
 void app_main(void) {
+    board_early_init();   // アンテナ等のボード固有初期化 (C6)。無線起動より前に行う。
+
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());

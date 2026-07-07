@@ -83,7 +83,7 @@ struct SWIOState
 
 #define IRAM IRAM_ATTR
 
-#if defined(RUNNING_ON_ESP32)
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
 // You may need to rewrite, depending on your architecture.
 static inline void Send1BitSWIO( int t1coeff, int pinmaskD ) IRAM;
 static inline void Send0BitSWIO( int t1coeff, int pinmaskD ) IRAM;
@@ -153,14 +153,42 @@ extern int ch5xx_write_flash_using_microblob(struct SWIOState * iss, uint32_t st
 #define CR_BUF_RST                 ((uint32_t)0x00080000)
 #endif
 
-#if defined(RUNNING_ON_ESP32)
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
 
+// --- GPIO アクセスのアーキ中立化 ---------------------------------------------
+// ESP32(Xtensa) は従来どおり GPIO 構造体を直叩き (生成コードは元と同一)。
+// ESP32-C6(RISC-V) は構造体レイアウトが異なるため REG_WRITE/READ (アドレス固定)
+// を使う。どちらも SWDIO/SWCLK は GPIO0-31 の範囲なので単一レジスタで扱える。
+#if defined(RUNNING_ON_ESP32C6)
+#define BB_OUT_SET(m)  REG_WRITE(GPIO_OUT_W1TS_REG,    (m))
+#define BB_OUT_CLR(m)  REG_WRITE(GPIO_OUT_W1TC_REG,    (m))
+#define BB_OE_SET(m)   REG_WRITE(GPIO_ENABLE_W1TS_REG, (m))
+#define BB_OE_CLR(m)   REG_WRITE(GPIO_ENABLE_W1TC_REG, (m))
+#define BB_IN()        REG_READ(GPIO_IN_REG)
+#else
+#define BB_OUT_SET(m)  (GPIO.out_w1ts    = (m))
+#define BB_OUT_CLR(m)  (GPIO.out_w1tc    = (m))
+#define BB_OE_SET(m)   (GPIO.enable_w1ts = (m))
+#define BB_OE_CLR(m)   (GPIO.enable_w1tc = (m))
+#define BB_IN()        (GPIO.in)
+#endif
+
+#if defined(RUNNING_ON_ESP32C6)
+// RISC-V には Xtensa の bbci が無い。単純な volatile ビジーループで代替する。
+// 1 反復あたりの絶対時間は Xtensa 版と異なるが、ch32_swd.c 側の t1coeff スイープ
+// ({10,5,20,40}) が実機で合う係数を探すため、単調増加であれば足りる。
 static inline void PrecDelay( int delay )
 {
-	asm volatile( 
+	while( delay-- > 0 ) { __asm__ volatile( "nop" ); }
+}
+#else
+static inline void PrecDelay( int delay )
+{
+	asm volatile(
 	"1: addi %[delay], %[delay], -1\n"
 	"   bbci %[delay], 31, 1b\n" : [delay]"+r"(delay) );
 }
+#endif
 
 // TODO: Add continuation (bypass) functions.
 // TODO: Consider adding parity bit (though it seems rather useless)
@@ -174,9 +202,9 @@ static inline void Send1BitSWIO( int t1coeff, int pinmaskD )
 	// Low for a nominal period of time.
 	// High for a nominal period of time.
 
-	GPIO.out_w1tc = pinmaskD;
+	BB_OUT_CLR(pinmaskD);
 	PrecDelay( t1coeff );
-	GPIO.out_w1ts = pinmaskD;
+	BB_OUT_SET(pinmaskD);
 	PrecDelay( t1coeff );
 }
 
@@ -185,9 +213,9 @@ static inline void Send0BitSWIO( int t1coeff, int pinmaskD )
 	// Low for a LONG period of time.
 	// High for a nominal period of time.
 	int longwait = t1coeff*4;
-	GPIO.out_w1tc = pinmaskD;
+	BB_OUT_CLR(pinmaskD);
 	PrecDelay( longwait );
-	GPIO.out_w1ts = pinmaskD;
+	BB_OUT_SET(pinmaskD);
 	PrecDelay( t1coeff );
 }
 
@@ -205,35 +233,35 @@ static inline int ReadBitSWIO( struct SWIOState * state )
 	int timeout = 0;
 	int ret = 0;
 	int medwait = t1coeff * 2;
-	GPIO.out_w1tc = pinmaskD;
+	BB_OUT_CLR(pinmaskD);
 	PrecDelay( t1coeff );
-	GPIO.enable_w1tc = pinmaskD;
-	GPIO.out_w1ts = pinmaskD;
+	BB_OE_CLR(pinmaskD);
+	BB_OUT_SET(pinmaskD);
 #ifdef R_GLITCH_HIGH
 	int halfwait = t1coeff / 2;
 	PrecDelay( halfwait );
-	GPIO.enable_w1ts = pinmaskD;
-	GPIO.enable_w1tc = pinmaskD;
+	BB_OE_SET(pinmaskD);
+	BB_OE_CLR(pinmaskD);
 	PrecDelay( halfwait );
 #else
 	PrecDelay( medwait );
 #endif
-	ret = GPIO.in;
+	ret = BB_IN();
 
 #ifdef R_GLITCH_HIGH
 	if( !(ret & pinmaskD) )
 	{
 		// Wait if still low.
 		PrecDelay( medwait );
-		GPIO.enable_w1ts = pinmaskD;
-		GPIO.enable_w1tc = pinmaskD;
+		BB_OE_SET(pinmaskD);
+		BB_OE_CLR(pinmaskD);
 	}
 #endif
 	for( timeout = 0; timeout < MAX_IN_TIMEOUT; timeout++ )
 	{
-		if( GPIO.in & pinmaskD )
+		if( BB_IN() & pinmaskD )
 		{
-			GPIO.enable_w1ts = pinmaskD;
+			BB_OE_SET(pinmaskD);
 			int fastwait = t1coeff / 2;
 			PrecDelay( fastwait );
 			return !!(ret & pinmaskD);
@@ -241,7 +269,7 @@ static inline int ReadBitSWIO( struct SWIOState * state )
 	}
 	
 	// Force high anyway so, though hazarded, we can still move along.
-	GPIO.enable_w1ts = pinmaskD;
+	BB_OE_SET(pinmaskD);
 	return 2;
 }
 
@@ -251,25 +279,25 @@ static inline void SendBitRVSWD( int t1coeff, int pinmaskD, int pinmaskC, int va
 	// Assume:
 	// SWD is in indeterminte state.
 	// SWC is HIGH
-	GPIO.out_w1tc = pinmaskC;
+	BB_OUT_CLR(pinmaskC);
 	if( val )
-		GPIO.out_w1ts = pinmaskD;
+		BB_OUT_SET(pinmaskD);
 	else
-		GPIO.out_w1tc = pinmaskD;
-	GPIO.enable_w1ts = pinmaskD;
+		BB_OUT_CLR(pinmaskD);
+	BB_OE_SET(pinmaskD);
 	PrecDelay( t1coeff );
-	GPIO.out_w1ts = pinmaskC;
+	BB_OUT_SET(pinmaskC);
 	PrecDelay( t1coeff );
 }
 
 static inline int ReadBitRVSWD( int t1coeff, int pinmaskD, int pinmaskC )
 {
-	GPIO.enable_w1tc = pinmaskD;
-	GPIO.out_w1tc = pinmaskC;
-	GPIO.out_w1ts = pinmaskD;
+	BB_OE_CLR(pinmaskD);
+	BB_OUT_CLR(pinmaskC);
+	BB_OUT_SET(pinmaskD);
 	PrecDelay( t1coeff );
-	int r = !!(GPIO.in & pinmaskD);
-	GPIO.out_w1ts = pinmaskC;
+	int r = !!(BB_IN() & pinmaskD);
+	BB_OUT_SET(pinmaskC);
 	PrecDelay( t1coeff );
 	return r;
 }
@@ -280,10 +308,10 @@ static void MCFWriteReg32( struct SWIOState * state, uint8_t command, uint32_t v
 	int t1coeff = state->t1coeff;
 	int pinmaskD = state->pinmaskD;
 	int pinmaskC = state->pinmaskC;
-	GPIO.out_w1ts = pinmaskC;
-	GPIO.enable_w1ts = pinmaskC;
-	GPIO.out_w1ts = pinmaskD;
-	GPIO.enable_w1ts = pinmaskD;
+	BB_OUT_SET(pinmaskC);
+	BB_OE_SET(pinmaskC);
+	BB_OUT_SET(pinmaskD);
+	BB_OE_SET(pinmaskD);
 	// BB_PRINTF_DEBUG( "CO: (%08x=>%08x) %08x %08x %d %d\n", command, value, pinmaskD, pinmaskC, t1coeff, state->opmode );
 	if( state->opmode == 1 )
 	{
@@ -312,7 +340,7 @@ static void MCFWriteReg32( struct SWIOState * state, uint8_t command, uint32_t v
 	{
 		uint32_t mask;
 		DisableISR();
-		GPIO.out_w1tc = pinmaskD;
+		BB_OUT_CLR(pinmaskD);
 		PrecDelay( t1coeff );
 		int parity = 1;
 		for( mask = 1<<6; mask; mask >>= 1 )
@@ -345,14 +373,14 @@ static void MCFWriteReg32( struct SWIOState * state, uint8_t command, uint32_t v
 		SendBitRVSWD( t1coeff, pinmaskD, pinmaskC, 0 ); // ??? Seems to have something to do with halting?
 
 
-		GPIO.out_w1tc = pinmaskC;
+		BB_OUT_CLR(pinmaskC);
 		PrecDelay( t1coeff );
-		GPIO.out_w1tc = pinmaskD;
-		GPIO.enable_w1ts = pinmaskD;
+		BB_OUT_CLR(pinmaskD);
+		BB_OE_SET(pinmaskD);
 		PrecDelay( t1coeff );
-		GPIO.out_w1ts = pinmaskC;
+		BB_OUT_SET(pinmaskC);
 		PrecDelay( t1coeff );
-		GPIO.out_w1ts = pinmaskD;
+		BB_OUT_SET(pinmaskD);
 
 		EnableISR();
 		esp_rom_delay_us(8); // Sometimes 2 is too short.
@@ -365,10 +393,10 @@ static int MCFReadReg32( struct SWIOState * state, uint8_t command, uint32_t * v
 	int t1coeff = state->t1coeff;
 	int pinmaskD = state->pinmaskD;
 	int pinmaskC = state->pinmaskC;
-	GPIO.out_w1ts = pinmaskC;
-	GPIO.enable_w1ts = pinmaskC;
-	GPIO.out_w1ts = pinmaskD;
-	GPIO.enable_w1ts = pinmaskD;
+	BB_OUT_SET(pinmaskC);
+	BB_OE_SET(pinmaskC);
+	BB_OUT_SET(pinmaskD);
+	BB_OE_SET(pinmaskD);
 
 	if( state->opmode == 1 )
 	{
@@ -405,7 +433,7 @@ static int MCFReadReg32( struct SWIOState * state, uint8_t command, uint32_t * v
 	{
 		int mask;
 		DisableISR();
-		GPIO.out_w1tc = pinmaskD;
+		BB_OUT_CLR(pinmaskD);
 		PrecDelay( t1coeff );
 		int parity = 0;
 		for( mask = 1<<6; mask; mask >>= 1 )
@@ -455,14 +483,14 @@ static int MCFReadReg32( struct SWIOState * state, uint8_t command, uint32_t * v
 		SendBitRVSWD( t1coeff, pinmaskD, pinmaskC, 1 ); // 1 for data
 		SendBitRVSWD( t1coeff, pinmaskD, pinmaskC, 0 ); // ??? Seems to have something to do with halting?
 
-		GPIO.out_w1tc = pinmaskC;
+		BB_OUT_CLR(pinmaskC);
 		PrecDelay( t1coeff );
-		GPIO.out_w1tc = pinmaskD;
-		GPIO.enable_w1ts = pinmaskD;
+		BB_OUT_CLR(pinmaskD);
+		BB_OE_SET(pinmaskD);
 		PrecDelay( t1coeff );
-		GPIO.out_w1ts = pinmaskC;
+		BB_OUT_SET(pinmaskC);
 		PrecDelay( t1coeff );
-		GPIO.out_w1ts = pinmaskD;
+		BB_OUT_SET(pinmaskD);
 
 		EnableISR();
 		esp_rom_delay_us(8); // Sometimes 2 is too short.
@@ -484,7 +512,7 @@ static int InitializeSWDSWIO( struct SWIOState * state )
 {
 	for( int timeout = 20; timeout; timeout-- )
 	{
-#if !defined(RUNNING_ON_ESP32)
+#if !defined(RUNNING_ON_ESP32) && !defined(RUNNING_ON_ESP32C6)
 		BB_PRINTF_DEBUG( "CFG FOR RV\n" );
 		ConfigureIOForRVSWIO();
 		BB_PRINTF_DEBUG( "DONE CFG FOR RV\n" );
@@ -512,9 +540,9 @@ static int InitializeSWDSWIO( struct SWIOState * state )
 			return 0;
 		}
 
-#if defined(RUNNING_ON_ESP32)
-		GPIO.out_w1ts = state->pinmaskC;
-		GPIO.enable_w1ts = state->pinmaskC;
+#if defined(RUNNING_ON_ESP32) || defined(RUNNING_ON_ESP32C6)
+		BB_OUT_SET(state->pinmaskC);
+		BB_OE_SET(state->pinmaskC);
 #else
 		BB_PRINTF_DEBUG( "CFG FOR SWD\n" );
 		ConfigureIOForRVSWD();
