@@ -1,2 +1,5 @@
+# 内包 CH32 イメージ (variant 別) はビルド成果物。CH32 ソースから再生成するため
+# git では追跡しない。生成手順は ../README.md「内包 CH32 イメージの用意」を参照。
+ch32_joy_i2c.bin
 ch32_kbd_i2c.bin
 ch32_combo_i2c.bin

@@ -58,6 +58,24 @@ PATH="/opt/homebrew/opt/python@3.12/libexec/bin:$PATH" \
 > 公式の git clone + `install.sh` 方式でも可。その場合も macOS では cmake/ninja を
 > Homebrew で入れる必要がある (ESP-IDF は macOS 用にこれらを同梱しない)。
 
+## 内包 CH32 イメージの用意 (ビルド前に必須)
+
+ESP32 ファームは CH32 の i2c 版ファームを 1 つ内包し (variant により切替)、起動時に
+接続中の CH32 と版が違えば SWD で書き込む。この内包 bin は **CH32 ソースから生成する
+ビルド成果物**で、git では追跡しない (`main/.gitignore`)。CI はリリース毎に自動生成
+するが、**ローカルビルドでは事前に手動生成が必要**:
+
+```sh
+# variant に対応する i2c 版を PlatformIO でビルドし、main/ へコピーする。
+#   joystick → ch32_joy_i2c.bin / keyboard → ch32_kbd_i2c.bin / combined → ch32_combo_i2c.bin
+pio run -d ../ch32x035 -e joystick-i2c
+cp ../ch32x035/.pio/build/joystick-i2c/firmware.bin main/ch32_joy_i2c.bin
+```
+
+未生成のまま build すると configure 時に EMBED_FILES で失敗する。版数は CMake が
+`../ch32x035/src/main.c` の `FW_VERSION_*` から自動注入するため、bin を作り直したら
+CH32 ソースの版数と食い違わないよう **同じソースから生成する**こと。
+
 ## ビルド & 書き込み
 
 ```sh
