@@ -33,7 +33,7 @@ idf_component_register(
         "i2c_bridge.c"
         "ch32_swd.c"
         "ch32_ota.c"
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "../../common"
     REQUIRES bt nvs_flash driver
     # 内蔵 CH32 ファームイメージ (variant により切替)。
     EMBED_FILES "${CH32_EMBED}"
