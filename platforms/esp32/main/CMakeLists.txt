@@ -17,6 +17,26 @@ else()
 endif()
 message(STATUS "MimicX: 内包 CH32 イメージ variant = ${MIMICX_CH32_VARIANT} (${CH32_EMBED})")
 
+# 内包 CH32 イメージのバージョンを「単一ソース」= ch32x035/src/main.c の FW_VERSION_*
+# から抽出して注入する。CI は同じソースから bin をビルドして内包するため、ここを真実の
+# 出所にすることで ch32_image_config.h に版数を手書き同期していた頃の漏れ (0.9.2 のまま
+# → 毎起動で強制再書込) を構造的に防ぐ。
+set(CH32_MAIN_C "${CMAKE_CURRENT_LIST_DIR}/../../ch32x035/src/main.c")
+if(NOT EXISTS "${CH32_MAIN_C}")
+    message(FATAL_ERROR "CH32 main.c が見つからない: ${CH32_MAIN_C}")
+endif()
+# main.c の版数が変わったら再 configure して取り直す
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CH32_MAIN_C}")
+file(READ "${CH32_MAIN_C}" _ch32_main_src)
+foreach(_part MAJOR MINOR PATCH)
+    if(_ch32_main_src MATCHES "#define[ \t]+FW_VERSION_${_part}[ \t]+([0-9]+)")
+        set(CH32_VER_${_part} "${CMAKE_MATCH_1}")
+    else()
+        message(FATAL_ERROR "FW_VERSION_${_part} を ${CH32_MAIN_C} から抽出できない")
+    endif()
+endforeach()
+message(STATUS "MimicX: 内包 CH32 version = ${CH32_VER_MAJOR}.${CH32_VER_MINOR}.${CH32_VER_PATCH} (from ch32x035/src/main.c)")
+
 idf_component_register(
     SRCS
         "main.c"
@@ -30,7 +50,11 @@ idf_component_register(
     EMBED_FILES "${CH32_EMBED}"
 )
 
-target_compile_definitions(${COMPONENT_LIB} PRIVATE ${CH32_DEF})
+target_compile_definitions(${COMPONENT_LIB} PRIVATE
+    ${CH32_DEF}
+    CH32_IMG_VER_MAJ=${CH32_VER_MAJOR}
+    CH32_IMG_VER_MIN=${CH32_VER_MINOR}
+    CH32_IMG_VER_PATCH=${CH32_VER_PATCH})
 
 # bitbang_rvswdio.h (vendored, CNLohr) は未使用の static 関数群を含むため、
 # ch32_swd.c のみ該当警告を無効化する (-Werror 回避)。
