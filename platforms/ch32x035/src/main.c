@@ -41,9 +41,12 @@
 
 #define PROTOCOL_VERSION_MAJOR  0
 #define PROTOCOL_VERSION_MINOR  7  // 0.7: serial / SET_LED / SET_LED_BLINK / HEART_BEAT を追加
-#define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  9
-#define FW_VERSION_PATCH  4   // 0.9.4 (XIAO ESP32-C3 対応リリース。CH32 側の動作変更なし)
+// FW 版数は共有の単一ソース (platforms/common/mimicx_version.h) を参照する。
+// 版数を上げるときはそちらを編集する (ESP32 / タグと自動で揃う)。
+#include "mimicx_version.h"
+#define FW_VERSION_MAJOR  MIMICX_VERSION_MAJOR
+#define FW_VERSION_MINOR  MIMICX_VERSION_MINOR
+#define FW_VERSION_PATCH  MIMICX_VERSION_PATCH
 
 // MIDI チャンネル (デバイス→ホスト 通知用)
 #define MIDI_CH_STATUS    15

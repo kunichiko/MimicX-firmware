@@ -20,10 +20,42 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # 0) 版数ゲート: タグ (vX.Y.Z) と単一ソース common/mimicx_version.h の一致を検査。
+  #    不一致ならここで fail し、以降のビルド/リリースを止める。非タグ (PR /
+  #    workflow_dispatch) では no-op で通す。ESP アプリ版数・CH32 FW 版数・内包
+  #    照合版数はすべてこのヘッダ由来なので、タグと一致すれば 3 者すべて揃う。
+  # ---------------------------------------------------------------------------
+  verify-version:
+    name: Verify version (tag == mimicx_version.h)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Check tag matches mimicx_version.h
+        run: |
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+            echo "ℹ︎ 非タグビルド → 版数ゲートはスキップ"
+            exit 0
+          fi
+          TAG="${GITHUB_REF#refs/tags/v}"
+          H=platforms/common/mimicx_version.h
+          MAJ=$(grep -oP 'MIMICX_VERSION_MAJOR\s+\K[0-9]+' "$H")
+          MIN=$(grep -oP 'MIMICX_VERSION_MINOR\s+\K[0-9]+' "$H")
+          PAT=$(grep -oP 'MIMICX_VERSION_PATCH\s+\K[0-9]+' "$H")
+          VER="${MAJ}.${MIN}.${PAT}"
+          echo "tag=v${TAG}  header=${VER}"
+          if [[ "${TAG}" != "${VER}" ]]; then
+            echo "::error::タグ (v${TAG}) と ${H} (${VER}) が不一致。両者を揃えてください"
+            exit 1
+          fi
+          echo "✓ タグと mimicx_version.h が一致"
+
+  # ---------------------------------------------------------------------------
   # 1) CH32 ファーム: standalone(USB直) + i2c(2チップ) を variant ごとにビルド
   # ---------------------------------------------------------------------------
   build-ch32:
     name: Build CH32 (${{ matrix.variant }})
+    needs: verify-version
     runs-on: ubuntu-latest
     strategy:
       matrix:
