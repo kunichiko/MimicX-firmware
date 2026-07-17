@@ -20,16 +20,18 @@ static const char *TAG = "ch32_swd";
 // bitbang_rvswdio.h は ESP32(Xtensa) 実装を内蔵する。GPIO アクセスと PrecDelay /
 // 割り込み制御はアーキ依存なので、下記シンボルを与えてから include する。
 //   DisableISR/EnableISR: ビットバング中の割り込みを止めてタイミングを守る。
-#if defined(CONFIG_IDF_TARGET_ARCH_RISCV)
-// RISC-V (ESP32-C3 / C6 等): xtensa 割り込みレベル API が無いため、portMUX の
-// クリティカルセクション (割り込み無効 + スピンロック) でタイミングを守る。
+#if defined(CONFIG_IDF_TARGET_ARCH_RISCV) || defined(CONFIG_IDF_TARGET_ESP32S3)
+// RISC-V (ESP32-C3 / C6 等) と ESP32-S3: portMUX のクリティカルセクション
+// (割り込み無効 + スピンロック) でタイミングを守る (portMUX は Xtensa でも動く)。
+// S3 は Xtensa だが GPIO 構造体レイアウトが ESP32 classic と異なるため、
+// レジスタ直アクセス版 (RUNNING_ON_ESP32_RISCV = REG_WRITE/READ) を使う。
 // SWD 書込は起動時 (BLE 接続前) の一過性処理なので短時間の割り込み停止は許容。
 static portMUX_TYPE s_swd_mux = portMUX_INITIALIZER_UNLOCKED;
 #define DisableISR()  portENTER_CRITICAL(&s_swd_mux)
 #define EnableISR()   portEXIT_CRITICAL(&s_swd_mux)
 #define RUNNING_ON_ESP32_RISCV
 #else
-// Xtensa (ESP32): cookbook と同じく割り込みレベルを直接操作。
+// Xtensa (ESP32 classic): cookbook と同じく割り込みレベルを直接操作。
 #include "xtensa/xtruntime.h"
 #define DisableISR()  XTOS_SET_INTLEVEL(XCHAL_EXCM_LEVEL)
 #define EnableISR()   XTOS_SET_INTLEVEL(0)
