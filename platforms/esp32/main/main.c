@@ -29,6 +29,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -253,6 +254,28 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 // アドバタイズ: MIDI サービス UUID を広告し、名前は scan response に載せる
 //   (128bit UUID(18B) + flags(3B) で adv が埋まるため名前は分離する)
 // ---------------------------------------------------------------------------
+// adv_start は接続確立失敗 (BLE_GAP_EVENT_CONNECT status!=0) の直後だと、失敗した
+// 接続のスロットがまだ解放されておらず BLE_HS_ENOMEM で失敗することがある
+// (MAX_CONNECTIONS=1)。そのまま諦めるとリセットまで誰からも見えなくなるので、
+// 失敗時は 500ms 後にリトライする。
+static void adv_retry_cb(void *arg) {
+    (void)arg;
+    start_advertising();
+}
+
+static void schedule_adv_retry(void) {
+    static esp_timer_handle_t s_adv_retry_timer;
+    if (s_adv_retry_timer == NULL) {
+        const esp_timer_create_args_t args = {
+            .callback = adv_retry_cb,
+            .name = "adv_retry",
+        };
+        if (esp_timer_create(&args, &s_adv_retry_timer) != ESP_OK) return;
+    }
+    esp_timer_stop(s_adv_retry_timer);
+    esp_timer_start_once(s_adv_retry_timer, 500 * 1000);   // 500ms
+}
+
 static void start_advertising(void) {
     struct ble_hs_adv_fields fields;
     struct ble_hs_adv_fields rsp_fields;
@@ -288,7 +311,12 @@ static void start_advertising(void) {
 
     rc = ble_gap_adv_start(g_addr_type, NULL, BLE_HS_FOREVER,
                            &adv_params, gap_event_handler, NULL);
-    if (rc != 0) { ESP_LOGE(TAG, "adv_start rc=%d", rc); return; }
+    if (rc == BLE_HS_EALREADY) return;   // 既に広告中
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv_start rc=%d (retrying in 500ms)", rc);
+        schedule_adv_retry();
+        return;
+    }
     ESP_LOGI(TAG, "advertising as \"%s\"", DEVICE_NAME);
 }
 
