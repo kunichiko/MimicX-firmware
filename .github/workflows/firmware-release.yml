@@ -191,9 +191,18 @@ jobs:
           mkdir -p dist
           # merge-bin の出力は build/ 内 (0x0 から書ける統合イメージ。esptool / esp-web-tools 用)
           cp "$P/build/merged.bin" "dist/${{ matrix.board.prefix }}_${{ matrix.variant }}_${V}.bin"
-          # 個別 app バイナリも参考用に同梱
+          # 個別 app バイナリ (Web フラッシャーの「設定保持アップデート」用 + 参考用)
           cp "$P/build/${{ matrix.board.app }}" \
              "dist/${{ matrix.board.prefix }}_${{ matrix.variant }}_${V}_app.bin" || true
+          # bootloader / partition-table は variant 共通なので combined ビルドでのみ添付。
+          # Web フラッシャーが NVS (ボンド保存領域) を潰さずに書けるよう、merged 1 枚
+          # ではなく個別 offset 書き込み用のパーツも配布する。
+          if [[ "${{ matrix.variant }}" == "combined" ]]; then
+            cp "$P/build/bootloader/bootloader.bin" \
+               "dist/${{ matrix.board.prefix }}_bootloader_${V}.bin"
+            cp "$P/build/partition_table/partition-table.bin" \
+               "dist/${{ matrix.board.prefix }}_ptable_${V}.bin"
+          fi
           ls -la dist/
 
       - name: Upload artifact
@@ -284,14 +293,10 @@ jobs:
       - name: Stage bins under docs/firmware/firmwares/
         run: |
           mkdir -p docs/firmware/firmwares
-          # CH32 standalone (mimicx_*) と 無線 merged (mimicx-esp32_* / mimicx-esp32c6_*) を
-          # 同一オリジン配備。app 単体 (*_app.bin) は Web フラッシャーで使わないので除外 (Release のみ)。
-          for f in artifacts/*.bin; do
-            case "$(basename "$f")" in
-              *_app.bin) ;;
-              *) cp "$f" docs/firmware/firmwares/ ;;
-            esac
-          done
+          # CH32 standalone (mimicx_*)、無線 merged (初回インストール用フォールバック)、
+          # app 単体 + bootloader + partition-table (NVS を保持する 3 パーツ書き込み用) を
+          # すべて同一オリジンに配備する。
+          cp artifacts/*.bin docs/firmware/firmwares/
           ls -la docs/firmware/firmwares/
 
       - name: Commit and push

@@ -124,14 +124,16 @@
         const VARIANTS = { joystick: [], keyboard: [], combined: [] };
         const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
 
-        // 無線 merged イメージ (offset 0x0) アセット名規約:
-        //   mimicx-esp32_<variant>_v<ver>.bin    (ESP32-WROOM-32, Xtensa)
-        //   mimicx-esp32c6_<variant>_v<ver>.bin  (XIAO ESP32-C6, RISC-V)
-        //   mimicx-esp32c3_<variant>_v<ver>.bin  (XIAO ESP32-C3, RISC-V)
-        //   (..._app.bin は app 単体なので除外)
-        // 同一 version の両ボードを 1 エントリにまとめ、manifest に両 build を載せる
+        // アセット名規約 (CORS の都合で bin は同一オリジン docs/firmware/firmwares/ から取得):
+        //   mimicx-<board>_<variant>_v<ver>.bin        merged (0x0 一括書き。初回/フォールバック用)
+        //   mimicx-<board>_<variant>_v<ver>_app.bin    app 単体 (0x10000)
+        //   mimicx-<board>_bootloader_v<ver>.bin       bootloader (variant 共通)
+        //   mimicx-<board>_ptable_v<ver>.bin           partition-table (variant 共通)
+        // app + bootloader + ptable が揃う版は「3 パーツ書き込み」を使う。merged は
+        // 隙間 (NVS 0x9000〜 = BLE ボンド保存領域) を 0xFF で潰してしまい、更新のたびに
+        // 全ホストと再ペアリングが必要になるため、揃わない旧版のみのフォールバックとする。
+        // 同一 version の各ボードを 1 エントリにまとめ、manifest に全 build を載せる
         // → esp-web-tools が接続チップを判定して正しい bin を書く。
-        // CH32 と同様、CORS の都合で bin は同一オリジン (docs/firmware/firmwares/) から取得する。
         async function initVariants() {
             const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
             if (!res.ok) throw new Error(`Releases API HTTP ${res.status}`);
@@ -139,20 +141,30 @@
             for (const rel of releases) {
                 const date = (rel.published_at || '').slice(0, 10);
                 const note = (rel.body || '').trim();
+                // bootloader / ptable (variant 共通) を先に拾う
+                const common = {};   // { [board]: { bootloader?, ptable? } }
+                for (const a of rel.assets || []) {
+                    const c = /^mimicx-(esp32c6|esp32c3|esp32)_(bootloader|ptable)_v[\d.]+\.bin$/.exec(a.name);
+                    if (!c) continue;
+                    (common[c[1]] ??= {})[c[2]] =
+                        new URL(`firmwares/${a.name}`, location.href).href;
+                }
                 for (const a of rel.assets || []) {
                     // esp32c6/c3 を先に判定 (esp32 が前方一致してしまうため)
-                    const m = /^mimicx-(esp32c6|esp32c3|esp32)_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
+                    const m = /^mimicx-(esp32c6|esp32c3|esp32)_(joystick|keyboard|combined)_v[\d.]+(_app)?\.bin$/.exec(a.name);
                     if (!m) continue;
                     const board = m[1];      // 'esp32' | 'esp32c6' | 'esp32c3'
                     const variant = m[2];
+                    const isApp = !!m[3];
                     if (!VARIANTS[variant]) continue;
                     let entry = VARIANTS[variant].find(e => e.version === rel.tag_name);
                     if (!entry) {
-                        entry = { version: rel.tag_name, date, note, urls: {} };
+                        entry = { version: rel.tag_name, date, note, urls: {}, apps: {}, common };
                         VARIANTS[variant].push(entry);
                     }
                     // 絶対 URL (manifest が blob: URL のため相対解決できない)
-                    entry.urls[board] = new URL(`firmwares/${a.name}`, location.href).href;
+                    const url = new URL(`firmwares/${a.name}`, location.href).href;
+                    if (isApp) entry.apps[board] = url; else entry.urls[board] = url;
                 }
             }
         }
@@ -170,14 +182,34 @@
             status.className = `status-${type}`;
         }
 
+        // bootloader の書き込み offset (チップ依存)。partition-table は 0x8000、
+        // app は 0x10000 で全ボード共通 (sdkconfig 既定)。
+        const BOOTLOADER_OFFSET = { esp32: 0x1000, esp32c6: 0x0, esp32c3: 0x0 };
+
         // 選択中 variant/version から esp-web-tools manifest を組み立て、blob URL を
         // install ボタンへ割り当てる。parts[].path は絶対 URL を使う。
         function setManifest(variant, rel) {
             // 利用可能なボードぶんの build を並べる。接続チップに応じ esp-web-tools が選択。
-            const builds = Object.entries(rel.urls).map(([board, url]) => ({
-                chipFamily: CHIP_FAMILY[board],
-                parts: [{ path: url, offset: 0 }],
-            }));
+            // app + bootloader + ptable が揃えば NVS (BLE ボンド) を保持する 3 パーツ
+            // 書き込み、揃わない旧リリースは merged (0x0 一括 = ボンド消去) にフォールバック。
+            const builds = Object.entries(rel.urls).map(([board, url]) => {
+                const app = rel.apps?.[board];
+                const cm = rel.common?.[board];
+                if (app && cm?.bootloader && cm?.ptable) {
+                    return {
+                        chipFamily: CHIP_FAMILY[board],
+                        parts: [
+                            { path: cm.bootloader, offset: BOOTLOADER_OFFSET[board] },
+                            { path: cm.ptable, offset: 0x8000 },
+                            { path: app, offset: 0x10000 },
+                        ],
+                    };
+                }
+                return {
+                    chipFamily: CHIP_FAMILY[board],
+                    parts: [{ path: url, offset: 0 }],
+                };
+            });
             const manifest = {
                 name: `MimicX 無線 (${variant})`,
                 version: rel.version,
