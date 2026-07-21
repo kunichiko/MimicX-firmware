@@ -23,7 +23,7 @@ XIAO の USB-C 1 ポートで「普通の有線 USB MimicX アダプタ」とし
 | I2C SDA / SWDIO | GPIO22 (D4) | **GPIO5 (D4)** |
 | I2C SCL / SWCLK | GPIO23 (D5) | **GPIO6 (D5)** |
 | INT | GPIO21 (D3) | **GPIO4 (D3)** |
-| アンテナ | RF スイッチ初期化必要 | オンボード直結 (初期化不要) |
+| アンテナ | RF スイッチ初期化必要 | RF スイッチなし (初期化不要)。**ただし物理アンテナは u.FL 外付け必須** — 未接続だと BLE 到達距離が数十 cm になり「すぐ隣の機器からしか見えない」症状になる |
 | USB | Serial/JTAG (ログ専用) | **OTG → USB-MIDI (TinyUSB)** |
 | ログ/コンソール | USB Serial/JTAG | **UART0 (D6=TX/GPIO43, D7=RX/GPIO44)** |
 | SWD ビットバング | portMUX + REG_WRITE | 同左 (Xtensa でも portMUX/REG_WRITE を使用) |
@@ -68,8 +68,12 @@ idf.py -C MimicX-firmware/platforms/esp32s3 -p /dev/cu.usbmodemXXXX flash
 - ✅ BRIDGE_IDENTIFY 自答 (USB 経路): proto/fw/transport=0x00/serial/name とも仕様どおり
 - ✅ CH32 中継 (USB → I2C): IDENTIFY (0x01) が CH32 まで届き応答が返る (実機 joy 基板)
 - ✅ アプリ (MimicX-app, macOS) が本ブリッジを MimicX として認識・接続できることを確認
+- ✅ BLE アドバタイズが USB-MIDI と併走することを確認 (アンテナ接続必須、上表参照)。
+  BLE の接続→切断後のアドバタイズ復帰も OK。アプリ (macOS) からは USB / BLE の
+  2 デバイスとして見え、両経路とも IDENTIFY が通る
 - ⬜ Windows / Android での USB enumerate + アプリ接続
-- ⬜ BLE と USB の同時接続時の挙動 (アービトレーションポリシーは現状「両方許可」)
+- ⬜ BLE と USB の「同時接続」(片方で操作中にもう片方から接続) の挙動
+  (アービトレーションポリシーは現状「両方許可」)
 - ⬜ SWD ビットバング (CH32 自動 OTA) の t1coeff が S3 の実機で合うか
 
 ### ⚠ flash 直後は USB-MIDI が現れない (実機で確認済みの挙動)
