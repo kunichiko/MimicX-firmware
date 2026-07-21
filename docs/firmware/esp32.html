@@ -73,7 +73,7 @@
             Web Serial 対応の Chromium 系ブラウザ (Chrome / Edge) が必要です。Safari / Firefox は非対応です。
         </div>
         <div class="warning">
-            これは <strong>無線版 (ESP32 / XIAO ESP32-C6 / XIAO ESP32-C3)</strong> 用です。CH32 単体
+            これは <strong>無線版 (ESP32 / XIAO ESP32-C6 / XIAO ESP32-C3 / XIAO ESP32-S3)</strong> 用です。CH32 単体
             (USB 直結) のアダプタには使えません (その場合は <a href="./index.html">CH32 用フラッシャー</a> を使用)。
         </div>
         <div class="warning">
@@ -82,6 +82,11 @@
             再列挙する際のブラウザ側の不具合で、<strong>書き込み自体は成功しています</strong> (挿し直せば
             新ファームで起動します)。USB-UART ブリッジ搭載の ESP32 DevBoard では発生しません。気になる場合は
             <code>idf.py flash</code> でのネイティブ書き込みをご利用ください。
+        </div>
+        <div class="warning">
+            ⚠ <strong>XIAO ESP32-S3</strong>: 書き込み完了後、ROM ダウンロードモードに残って
+            USB-MIDI デバイスが現れないことがあります。<strong>RESET ボタンを一度押す</strong>
+            (または USB を挿し直す) と "Mimic X (Bridge)" として認識されます。
         </div>
     </div>
 
@@ -117,8 +122,8 @@
         };
 
         // esp-web-tools の chipFamily 名 (接続チップに応じて自動選択される)
-        const CHIP_FAMILY = { esp32: 'ESP32', esp32c6: 'ESP32-C6', esp32c3: 'ESP32-C3' };
-        const BOARD_LABEL = { esp32: 'ESP32-WROOM-32', esp32c6: 'XIAO ESP32-C6', esp32c3: 'XIAO ESP32-C3' };
+        const CHIP_FAMILY = { esp32: 'ESP32', esp32c6: 'ESP32-C6', esp32c3: 'ESP32-C3', esp32s3: 'ESP32-S3' };
+        const BOARD_LABEL = { esp32: 'ESP32-WROOM-32', esp32c6: 'XIAO ESP32-C6', esp32c3: 'XIAO ESP32-C3', esp32s3: 'XIAO ESP32-S3' };
 
         // { [variant]: [{ version, date, note, urls:{esp32?,esp32c6?} }, ...] }  新しい順
         const VARIANTS = { joystick: [], keyboard: [], combined: [] };
@@ -128,6 +133,7 @@
         //   mimicx-esp32_<variant>_v<ver>.bin    (ESP32-WROOM-32, Xtensa)
         //   mimicx-esp32c6_<variant>_v<ver>.bin  (XIAO ESP32-C6, RISC-V)
         //   mimicx-esp32c3_<variant>_v<ver>.bin  (XIAO ESP32-C3, RISC-V)
+        //   mimicx-esp32s3_<variant>_v<ver>.bin  (XIAO ESP32-S3, Xtensa, BLE + USB-MIDI)
         //   (..._app.bin は app 単体なので除外)
         // 同一 version の両ボードを 1 エントリにまとめ、manifest に両 build を載せる
         // → esp-web-tools が接続チップを判定して正しい bin を書く。
@@ -140,10 +146,10 @@
                 const date = (rel.published_at || '').slice(0, 10);
                 const note = (rel.body || '').trim();
                 for (const a of rel.assets || []) {
-                    // esp32c6/c3 を先に判定 (esp32 が前方一致してしまうため)
-                    const m = /^mimicx-(esp32c6|esp32c3|esp32)_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
+                    // esp32c6/c3/s3 を先に判定 (esp32 が前方一致してしまうため)
+                    const m = /^mimicx-(esp32c6|esp32c3|esp32s3|esp32)_(joystick|keyboard|combined)_v[\d.]+\.bin$/.exec(a.name);
                     if (!m) continue;
-                    const board = m[1];      // 'esp32' | 'esp32c6' | 'esp32c3'
+                    const board = m[1];      // 'esp32' | 'esp32c6' | 'esp32c3' | 'esp32s3'
                     const variant = m[2];
                     if (!VARIANTS[variant]) continue;
                     let entry = VARIANTS[variant].find(e => e.version === rel.tag_name);
@@ -201,7 +207,7 @@
                 opt.value = r.version;
                 opt.dataset.note = r.note || '';
                 // 対応ボードを版名に併記 (例: v0.9.3 (2026-07-07) [ESP32 / XIAO C6])
-                const shortLabel = { esp32: 'ESP32', esp32c6: 'XIAO C6', esp32c3: 'XIAO C3' };
+                const shortLabel = { esp32: 'ESP32', esp32c6: 'XIAO C6', esp32c3: 'XIAO C3', esp32s3: 'XIAO S3' };
                 const boards = Object.keys(r.urls).map(b => shortLabel[b] || b).join(' / ');
                 opt.textContent = `${r.version} (${r.date}) [${boards}]`;
                 firmwareSelect.appendChild(opt);
