@@ -16,6 +16,6 @@
 // ===================================================================================
 #pragma once
 
-#define MIMICX_VERSION_MAJOR 0
-#define MIMICX_VERSION_MINOR 9
-#define MIMICX_VERSION_PATCH 8
+#define MIMICX_VERSION_MAJOR 1
+#define MIMICX_VERSION_MINOR 0
+#define MIMICX_VERSION_PATCH 0
