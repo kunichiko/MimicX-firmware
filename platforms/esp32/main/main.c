@@ -47,6 +47,10 @@
 #include "board_config.h"
 #include "mimicx_version.h"
 
+#if defined(BOARD_HAS_USB_MIDI)
+#include "usb_midi_bridge.h"   // S3 のみ: USB-OTG による USB-MIDI トランスポート
+#endif
+
 #if defined(BOARD_HAS_ANTENNA_SWITCH)
 #include "driver/gpio.h"
 #endif
@@ -76,9 +80,11 @@ static const char *TAG = "mimicx";
 #define CMD_BRIDGE_IDENTIFY_RSP 0x0B
 #define CMD_RESET               0x7F
 
-#define TRANSPORT_BLE           0x01   // §6.4.5 transport: 0x00=USB, 0x01=BLE
+#define TRANSPORT_USB           0x00   // §6.4.5 transport: 0x00=USB, 0x01=BLE
+#define TRANSPORT_BLE           0x01
 
 static uint8_t g_addr_type;
+static volatile bool g_ble_connected = false;   // GAP 接続状態 (切断通知の判定用)
 
 static void start_advertising(void);
 
@@ -122,9 +128,12 @@ static void build_serial16(char out[16]) {
 }
 
 // ---------------------------------------------------------------------------
-// BRIDGE_IDENTIFY_RESPONSE をブリッジ自身が組み立てて notify する (§6.4.5)。
+// BRIDGE_IDENTIFY_RESPONSE をブリッジ自身が組み立てて送信する (§6.4.5)。
+// transport には要求が届いた経路 (TRANSPORT_BLE / TRANSPORT_USB) を申告し、
+// send で同じ経路に返す。
 // ---------------------------------------------------------------------------
-static void send_bridge_identify_response(void) {
+static void send_bridge_identify_response(uint8_t transport,
+                                          void (*send)(const uint8_t *msg, int n)) {
     uint8_t rsp[64];
     int i = 0;
     rsp[i++] = 0xF0;
@@ -136,7 +145,7 @@ static void send_bridge_identify_response(void) {
     rsp[i++] = BRIDGE_FW_MAJOR;
     rsp[i++] = BRIDGE_FW_MINOR;
     rsp[i++] = BRIDGE_FW_PATCH;
-    rsp[i++] = TRANSPORT_BLE;
+    rsp[i++] = transport;
     char ser[16];
     build_serial16(ser);
     memcpy(&rsp[i], ser, 16);
@@ -146,7 +155,7 @@ static void send_bridge_identify_response(void) {
         rsp[i++] = (uint8_t)(name[j] & 0x7F);
     }
     rsp[i++] = 0xF7;
-    ble_midi_notify(rsp, i);
+    send(rsp, i);
 }
 
 // ---------------------------------------------------------------------------
@@ -160,27 +169,63 @@ static bool is_bridge_identify_req(const uint8_t *m, int n) {
 
 static void on_ble_rx(const uint8_t *msg, int len) {
     if (is_bridge_identify_req(msg, len)) {
-        ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST -> self-answer");
-        send_bridge_identify_response();
+        ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST (BLE) -> self-answer");
+        send_bridge_identify_response(TRANSPORT_BLE, ble_midi_notify);
         return;
     }
     i2c_bridge_write(msg, len);   // それ以外は CH32 へ中継
 }
 
+#if defined(BOARD_HAS_USB_MIDI)
+// 中継: PC(USB-MIDI) → CH32(I2C)。BLE と対称。
+static void on_usb_rx(const uint8_t *msg, int len) {
+    if (is_bridge_identify_req(msg, len)) {
+        ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST (USB) -> self-answer");
+        send_bridge_identify_response(TRANSPORT_USB, usb_midi_bridge_notify);
+        return;
+    }
+    i2c_bridge_write(msg, len);
+}
+#endif
+
 // ---------------------------------------------------------------------------
-// 中継: CH32(I2C+INT) → phone(BLE)
+// 中継: CH32(I2C+INT) → phone(BLE) / PC(USB)
+//   device→host 通知は接続中の全トランスポートへ送る (CH32 の USB+I2C 並走と
+//   同じ方針)。未接続側は各 notify 内で捨てられる。
 // ---------------------------------------------------------------------------
 static void on_i2c_rx(const uint8_t *midi, int len) {
     ble_midi_notify(midi, len);
+#if defined(BOARD_HAS_USB_MIDI)
+    usb_midi_bridge_notify(midi, len);
+#endif
 }
 
 // 切断時、CH32 に DISCONNECT + RESET を送って HID を解放させる (押しっぱなし防止)。
+// USB/BLE の両トランスポートがある構成では「最後のホストが居なくなったとき」だけ
+// 解放する (もう一方がまだ接続中なら送らない)。
 static void notify_ch32_disconnect(void) {
     static const uint8_t disc[] = { 0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, CMD_DISCONNECT, 0x00, 0xF7 };
     static const uint8_t rst[]  = { 0xF0, SYSEX_MFR_ID, SYSEX_SUB_ID, CMD_RESET,      0x00, 0xF7 };
     i2c_bridge_write(disc, sizeof(disc));
     i2c_bridge_write(rst, sizeof(rst));
 }
+
+static bool any_other_host_connected_than_ble(void) {
+#if defined(BOARD_HAS_USB_MIDI)
+    return usb_midi_bridge_mounted();
+#else
+    return false;
+#endif
+}
+
+#if defined(BOARD_HAS_USB_MIDI)
+// USB マウント状態の変化 (usb_midi_bridge の監視タスクから呼ばれる)。
+static void on_usb_state(bool mounted) {
+    if (!mounted && !g_ble_connected) {
+        notify_ch32_disconnect();
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // GAP イベント
@@ -191,6 +236,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
                 ESP_LOGI(TAG, "connected; conn_handle=%d", event->connect.conn_handle);
+                g_ble_connected = true;
                 ble_midi_set_conn(event->connect.conn_handle);
                 // レイテンシ低減のため connection interval を 7.5-15ms へ更新 (§2.3)。
                 struct ble_gap_upd_params p = {
@@ -208,8 +254,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnect; reason=%d", event->disconnect.reason);
+            g_ble_connected = false;
             ble_midi_set_conn(BLE_HS_CONN_HANDLE_NONE);
-            notify_ch32_disconnect();   // CH32 側の HID を解放
+            if (!any_other_host_connected_than_ble()) {
+                notify_ch32_disconnect();   // 最後のホストが消えた → CH32 の HID を解放
+            }
             start_advertising();
             return 0;
 
@@ -388,6 +437,11 @@ void app_main(void) {
 
     // BLE 受信 → 中継ハンドラを登録 (i2c_bridge_init 完了後)。
     ble_midi_set_rx_handler(on_ble_rx);
+
+#if defined(BOARD_HAS_USB_MIDI)
+    // USB-MIDI トランスポート (S3 のみ)。BLE と併走し、同じ CH32 へ中継する。
+    usb_midi_bridge_init(on_usb_rx, on_usb_state);
+#endif
 
     char ser[16];
     build_serial16(ser);

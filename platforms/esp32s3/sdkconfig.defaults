@@ -1,0 +1,42 @@
+# ===================================================================================
+# MimicX-ESP32-S3 (Seeed XIAO ESP32-S3) sdkconfig 既定値
+# (idf.py が初回に sdkconfig へ展開する。sdkconfig 自体は git 管理外)
+#
+# platforms/esp32c6/sdkconfig.defaults との差分方針:
+#   - S3 は USB-OTG を TinyUSB (USB-MIDI) が占有するため、ログ/コンソールは
+#     UART0 (D6=TX/GPIO43, D7=RX/GPIO44) へ出す。USB Serial/JTAG は OTG と
+#     PHY を共有しており併用できない。書き込みは BOOT ボタンの ROM ダウンロード
+#     モード (USB) か UART で行う
+#   - S3 はデュアルコア。特別なコア固定はしない (既定のまま)
+# ===================================================================================
+
+# --- Bluetooth: NimBLE (peripheral) を使用、Bluedroid は無効 ---
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="MimicX"
+
+# BLE-MIDI の SysEx 分割を減らすため MTU を拡張 (§2.3)
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+
+# --- BLE ペアリング/ボンディング (Windows BLE-MIDI はペアリング必須) ---
+CONFIG_BT_NIMBLE_SM_SC=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# --- TinyUSB: USB-MIDI クラスを 1 インターフェース有効化 (usb_midi_bridge.c) ---
+CONFIG_TINYUSB_MIDI_COUNT=1
+
+# --- ログ / コンソール (UART0。USB は TinyUSB が占有) ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# --- XIAO ESP32-S3 のフラッシュは 8MB ---
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"

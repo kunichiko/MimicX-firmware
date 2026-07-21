@@ -1,0 +1,11 @@
+# 依存コンポーネント (IDF Component Manager)
+#
+# esp_tinyusb は USB-OTG を持つターゲット (S3) の USB-MIDI ブリッジ
+# (usb_midi_bridge.c) 用。rules により S3 ビルド時のみ取得され、
+# ESP32 classic / C3 / C6 のビルドには影響しない。
+dependencies:
+  idf: ">=5.0"
+  espressif/esp_tinyusb:
+    version: "^1.4"
+    rules:
+      - if: "target in [esp32s3]"

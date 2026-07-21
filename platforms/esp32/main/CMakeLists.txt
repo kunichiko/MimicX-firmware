@@ -26,13 +26,20 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_LIST_DIR}/../../common/mimicx_version.h")
 message(STATUS "MimicX: 内包 CH32 照合版数 = ${MIMICX_VERSION} (from common/mimicx_version.h)")
 
+# USB-MIDI ブリッジは USB-OTG を持つターゲット (S3) のみ。C3/C6 の USB は
+# 固定機能の USB Serial/JTAG なので USB-MIDI 化できない (board_config.h 参照)。
+set(MIMICX_SRCS
+    "main.c"
+    "ble_midi.c"
+    "i2c_bridge.c"
+    "ch32_swd.c"
+    "ch32_ota.c")
+if(IDF_TARGET STREQUAL "esp32s3")
+    list(APPEND MIMICX_SRCS "usb_midi_bridge.c")
+endif()
+
 idf_component_register(
-    SRCS
-        "main.c"
-        "ble_midi.c"
-        "i2c_bridge.c"
-        "ch32_swd.c"
-        "ch32_ota.c"
+    SRCS ${MIMICX_SRCS}
     INCLUDE_DIRS "." "../../common"
     REQUIRES bt nvs_flash driver
     # 内蔵 CH32 ファームイメージ (variant により切替)。

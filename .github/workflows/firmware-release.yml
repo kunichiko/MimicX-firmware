@@ -3,7 +3,7 @@ name: Firmware Release
 # タグ v*.*.* を push したときに:
 #   1. CH32 ファームを 3 variant ぶんビルド (standalone USB 版 + 2チップ I2C 版)
 #   2. その I2C 版を内包した無線ファームを board × variant でビルド
-#      (board = esp32 / esp32c6 / esp32c3、variant = joystick / keyboard / combined → 計 9)
+#      (board = esp32 / esp32c6 / esp32c3 / esp32s3、variant = joystick / keyboard / combined → 計 12)
 #   3. すべての bin を GitHub Release に添付し、WebUSB フラッシャー用に Pages へ配備
 #
 # トリガ:
@@ -129,9 +129,10 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 2) ESP32 系 (無線) ファーム: CH32 i2c 版を内包して board × variant でビルド。
-  #    board = esp32 (WROOM DevKit, Xtensa) / esp32c6 (XIAO, RISC-V)。ソースは
-  #    platforms/esp32/main を共有し、C6 は platforms/esp32c6 プロジェクトから参照。
-  #    esp-idf-ci-action の Docker は両アーキのツールチェーンを内蔵するので target
+  #    board = esp32 (WROOM DevKit, Xtensa) / esp32c6・esp32c3 (XIAO, RISC-V) /
+  #    esp32s3 (XIAO, Xtensa。BLE に加え USB-MIDI ブリッジ付き)。ソースは
+  #    platforms/esp32/main を共有し、各ボードは自プロジェクトから参照。
+  #    esp-idf-ci-action の Docker は全アーキのツールチェーンを内蔵するので target
   #    を切り替えるだけでよい。
   # ---------------------------------------------------------------------------
   build-esp32:
@@ -145,6 +146,7 @@ jobs:
           - { target: esp32,   path: platforms/esp32,   prefix: mimicx-esp32,   app: mimicx-esp32-ble.bin }
           - { target: esp32c6, path: platforms/esp32c6, prefix: mimicx-esp32c6, app: mimicx-esp32c6-ble.bin }
           - { target: esp32c3, path: platforms/esp32c3, prefix: mimicx-esp32c3, app: mimicx-esp32c3-ble.bin }
+          - { target: esp32s3, path: platforms/esp32s3, prefix: mimicx-esp32s3, app: mimicx-esp32s3-ble-usb.bin }
         include:
           - { variant: joystick, embed: ch32_joy_i2c.bin }
           - { variant: keyboard, embed: ch32_kbd_i2c.bin }
