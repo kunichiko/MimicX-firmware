@@ -61,13 +61,20 @@ idf.py -C MimicX-firmware/platforms/esp32s3 -p /dev/cu.usbmodemXXXX flash
 内包 CH32 イメージの variant 切替は他プロジェクトと同じ
 (`idf.py -DMIMICX_CH32_VARIANT=combined build` 等)。
 
-## 状態 (2026-07-17)
+## 状態 (2026-07-21)
 
 - ✅ esp32s3 ビルド成功 (esp32 / esp32c3 / esp32c6 のリグレッションなしも確認)
-- ⬜ **実機未検証** (XIAO ESP32-S3 実機での確認項目):
-  - USB-MIDI enumerate (macOS/Windows/Android での認識、Audio MIDI 設定等)
-  - アプリ (MimicX-app) の USB-MIDI ホストが本ブリッジを MimicX として認識するか
-    (USB ディスクリプタの製品名/シリアルとアプリ側フィルタの整合)
-  - BLE と USB の同時接続時の挙動 (アービトレーションポリシーは現状「両方許可」)
-  - SWD ビットバング (CH32 自動 OTA) の t1coeff が S3 の実機で合うか
-  - flash 書き込み後の USB 再 enumerate 周り (OTG ↔ ROM ダウンロードモードの遷移)
+- ✅ USB-MIDI enumerate (macOS): "Mimic X (Bridge)" / iSerial `mimicx-bridge-<MAC>` を確認
+- ✅ BRIDGE_IDENTIFY 自答 (USB 経路): proto/fw/transport=0x00/serial/name とも仕様どおり
+- ✅ CH32 中継 (USB → I2C): IDENTIFY (0x01) が CH32 まで届き応答が返る (実機 joy 基板)
+- ✅ アプリ (MimicX-app, macOS) が本ブリッジを MimicX として認識・接続できることを確認
+- ⬜ Windows / Android での USB enumerate + アプリ接続
+- ⬜ BLE と USB の同時接続時の挙動 (アービトレーションポリシーは現状「両方許可」)
+- ⬜ SWD ビットバング (CH32 自動 OTA) の t1coeff が S3 の実機で合うか
+
+### ⚠ flash 直後は USB-MIDI が現れない (実機で確認済みの挙動)
+
+`idf.py flash` (USB Serial/JTAG 経由) の完了後、esptool の hard reset では ROM
+ダウンロードモードから抜けきらず、"USB JTAG_serial debug unit" のまま残ることがある。
+**もう一度リセット** (RESET ボタン、または JTAG ポートを開いて RTS パルス) すると
+アプリが起動して "Mimic X (Bridge)" に切り替わる。
