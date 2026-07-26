@@ -28,7 +28,11 @@
 #define BTN_DOWN2   13
 #define BTN_LEFT2   14
 #define BTN_RIGHT2  15
-#define BTN_COUNT   16
+// TOWNS パッド RUN/SELECT (protocol 0.9, ATARI モードのみ)。
+// RUN = 左右同時アサート、SELECT = 上下同時アサート (通常方向との OR)
+#define BTN_RUN     16
+#define BTN_SELECT  17
+#define BTN_COUNT   18
 
 // GPIO ピン割り当て (ATARI / X68000 標準 D-SUB 9pin 配線済み)
 // MimicX-hardware/atari-joystick の atari_joystick.ato と同期

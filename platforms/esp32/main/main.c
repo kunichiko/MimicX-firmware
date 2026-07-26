@@ -66,7 +66,7 @@ static const char *TAG = "mimicx";
 // プロトコル定数 (§6, CH32 と一致させること)
 // ---------------------------------------------------------------------------
 #define BRIDGE_PROTO_MAJOR  0
-#define BRIDGE_PROTO_MINOR  8   // ブリッジが実装する phone 側プロトコル (0.8)。FW 版数とは独立
+#define BRIDGE_PROTO_MINOR  9   // ブリッジが実装する phone 側プロトコル (0.9)。FW 版数とは独立
 // ESP ブリッジの FW 版数は共有の単一ソース (common/mimicx_version.h) を参照する。
 // IDENTIFY 応答 (§6) と起動バナーでアプリへ申告する値。CH32 / タグと必ず一致する。
 #define BRIDGE_FW_MAJOR     MIMICX_VERSION_MAJOR

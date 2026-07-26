@@ -40,7 +40,7 @@
 // ---------------------------------------------------------------------------
 
 #define PROTOCOL_VERSION_MAJOR  0
-#define PROTOCOL_VERSION_MINOR  7  // 0.7: serial / SET_LED / SET_LED_BLINK / HEART_BEAT を追加
+#define PROTOCOL_VERSION_MINOR  9  // 0.9: TOWNS パッド RUN/SELECT (note 21/22) + SOCD ガードを追加
 // FW 版数は共有の単一ソース (platforms/common/mimicx_version.h) を参照する。
 // 版数を上げるときはそちらを編集する (ESP32 / タグと自動で揃う)。
 #include "mimicx_version.h"

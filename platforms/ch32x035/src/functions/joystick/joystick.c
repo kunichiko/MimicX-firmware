@@ -41,6 +41,9 @@ static int note_to_btn(uint8_t note) {
     case 16: return BTN_DOWN2;
     case 17: return BTN_LEFT2;
     case 18: return BTN_RIGHT2;
+    // TOWNS パッド RUN/SELECT (protocol 0.9)
+    case 21: return BTN_RUN;
+    case 22: return BTN_SELECT;
     default: return -1;
     }
 }
@@ -302,10 +305,26 @@ static void md6_rebuild_lut(void) {
 // ---------------------------------------------------------------------------
 
 static void atari_update_gpio(void) {
-    set_pin(PIN_D0, btn_state[BTN_UP]);
-    set_pin(PIN_D1, btn_state[BTN_DOWN]);
-    set_pin(PIN_D2, btn_state[BTN_LEFT]);
-    set_pin(PIN_D3, btn_state[BTN_RIGHT]);
+    uint8_t up    = btn_state[BTN_UP];
+    uint8_t down  = btn_state[BTN_DOWN];
+    uint8_t left  = btn_state[BTN_LEFT];
+    uint8_t right = btn_state[BTN_RIGHT];
+
+    // SOCD ガード (protocol 0.9 §4.2.1): 方向ノート単独での左右同時・上下同時は
+    // 両方ニュートラルにする。ホスト側入力の一瞬の同時押しが TOWNS パッドの
+    // RUN (左右同時) / SELECT (上下同時) として誤検出されるのを防ぐ。
+    if (left && right) { left = 0; right = 0; }
+    if (up && down)    { up = 0;   down = 0; }
+
+    // TOWNS パッド RUN/SELECT: 意図的な同時アサートは専用ノート (21/22) で
+    // 表現され、通常方向と OR で重畳する。
+    if (btn_state[BTN_RUN])    { left = 1; right = 1; }
+    if (btn_state[BTN_SELECT]) { up = 1;   down = 1; }
+
+    set_pin(PIN_D0, up);
+    set_pin(PIN_D1, down);
+    set_pin(PIN_D2, left);
+    set_pin(PIN_D3, right);
     set_pin(PIN_D4, btn_state[BTN_A]);
     set_pin(PIN_D5, btn_state[BTN_B]);
 }
