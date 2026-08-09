@@ -112,6 +112,14 @@
         <esp-web-install-button id="install-btn" style="display:none;"></esp-web-install-button>
 
         <div class="release-note" style="margin-top: 12px;">
+            ⚠️ <strong>書き込みが終わったら、USB ケーブルを一度抜き差ししてください。</strong>
+            書き込みの前後でアダプタは短時間に何度も USB を切り替えます。このとき OS 側に
+            古い接続情報が残り、「デバイスは見えているのに一切応答しない」状態になることが
+            あります (macOS で確認)。抜き差しすれば確実に復旧します。書き込み後にアプリから
+            認識できない / 反応がない場合も、まず抜き差しをお試しください。
+        </div>
+
+        <div class="release-note" style="margin-top: 12px;">
             ⚠️ 書き込みダイアログで「<strong>Erase device</strong>」を選ぶと、BLE の
             ペアリング情報 (ボンド) も消去されます。ペアリング済みの Windows からは
             接続時に即切断が繰り返されるようになるため、通常の更新では erase を
