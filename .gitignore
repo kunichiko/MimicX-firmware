@@ -17,3 +17,4 @@ cmake-build-*/
 
 # Claude Code local settings (personal permissions)
 .claude/settings.local.json
+tools/midiprobe
