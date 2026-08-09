@@ -348,8 +348,6 @@ static void log_conn_params(uint16_t conn_handle, const char *when) {
              (unsigned)desc.supervision_timeout * 10u);
 }
 
-/// Apple 準拠の再要求を 1 接続につき 1 回だけ行うためのフラグ。
-static bool s_conn_param_retried = false;
 
 // ---------------------------------------------------------------------------
 // GAP イベント
@@ -361,19 +359,31 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             if (event->connect.status == 0) {
                 ESP_LOGI(TAG, "connected; conn_handle=%d", event->connect.conn_handle);
                 g_ble_connected = true;
-                s_conn_param_retried = false;
                 ble_midi_set_conn(event->connect.conn_handle);
                 // 要求前にホストが決めた値を出しておく (比較のため)
                 log_conn_params(event->connect.conn_handle, "on connect");
-                // レイテンシ低減のため connection interval を 7.5-15ms へ更新 (§2.3)。
+                // レイテンシ低減のため connection interval を 11.25ms へ更新 (§2.3)。
+                //
+                // macOS 実機での実測経過 (HEART_BEAT RTT のうなり = 1000 mod CI ずつ
+                // 位相がずれる現象から CI を逆算した):
+                //   要求 7.5-15ms  → CI 30ms のまま (既定値)。下限 7.5ms が Apple の
+                //                    許容外でレンジごと拒否されたとみられる
+                //   要求 15-30ms   → CI 30ms。レンジ内なので通ったが上限を選ばれた
+                //   要求 11.25-15ms→ CI 15ms。RTT 平均 51.7ms → 29.0ms  ← 採用
+                //   要求 11.25ms 固定 (min=max) → CI 30ms。レンジを潰すと要求ごと
+                //                    拒否される (RTT 平均 46.8ms で 30ms の署名に戻った)
+                // macOS は「下限 11.25ms 以上」かつ「レンジに幅があること」を要求し、
+                // その上で上限を選ぶ。上限を選ぶ性質を利用して下限に張り付かせようと
+                // すると、レンジが潰れた時点で弾かれるので成立しない。
+                // よって 11.25-15ms が到達可能な最良値。
                 struct ble_gap_upd_params p = {
-                    .itvl_min = 6,    // 6 * 1.25ms = 7.5ms
+                    .itvl_min = 9,    // 9 * 1.25ms = 11.25ms
                     .itvl_max = 12,   // 12 * 1.25ms = 15ms
                     .latency  = 0,
                     .supervision_timeout = 400,  // 4s
                 };
                 int rc = ble_gap_update_params(event->connect.conn_handle, &p);
-                ESP_LOGI(TAG, "update_params request (7.5-15ms) rc=%d", rc);
+                ESP_LOGI(TAG, "update_params request (11.25-15ms) rc=%d", rc);
             } else {
                 ESP_LOGW(TAG, "connect failed; status=%d", event->connect.status);
                 start_advertising();
@@ -395,24 +405,6 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             // 来ないか、status != 0 で来る)。合意された値をそのまま出す。
             ESP_LOGI(TAG, "conn update; status=%d", event->conn_update.status);
             log_conn_params(event->conn_update.conn_handle, "after update");
-            // 7.5-15ms の要求が通らなかった (= 15ms より粗いまま) 場合は、
-            // Apple のガイドラインを満たす 15-30ms で 1 回だけ再要求して、
-            // 「準拠した要求なら受け入れられるのか」を切り分ける。
-            if (!s_conn_param_retried) {
-                struct ble_gap_conn_desc d;
-                if (ble_gap_conn_find(event->conn_update.conn_handle, &d) == 0 &&
-                    d.conn_itvl > 12) {
-                    s_conn_param_retried = true;
-                    struct ble_gap_upd_params q = {
-                        .itvl_min = 12,   // 15ms   (Apple: Interval Min >= 15ms)
-                        .itvl_max = 24,   // 30ms   (Apple: Max >= Min + 15ms)
-                        .latency  = 0,
-                        .supervision_timeout = 400,  // 4s (Apple: <= 6s)
-                    };
-                    int rc2 = ble_gap_update_params(event->conn_update.conn_handle, &q);
-                    ESP_LOGI(TAG, "update_params retry (15-30ms) rc=%d", rc2);
-                }
-            }
             return 0;
 
         case BLE_GAP_EVENT_ADV_COMPLETE:
