@@ -30,6 +30,14 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "esp_system.h"
+#include "esp_rom_sys.h"   // esp_rom_software_reset_system (§6.4.6)
+// FORCE_DOWNLOAD_BOOT (§6.4.6)。C6 は LP_AON、それ以外は RTC_CNTL 配下。
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+#include "soc/lp_aon_reg.h"
+#else
+#include "soc/rtc_cntl_reg.h"
+#endif
 
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
@@ -76,9 +84,20 @@ static const char *TAG = "mimicx";
 #define SYSEX_MFR_ID            0x7D
 #define SYSEX_SUB_ID            0x01
 #define CMD_DISCONNECT          0x09
+#define CMD_ACK                 0x06
 #define CMD_BRIDGE_IDENTIFY_REQ 0x0A
 #define CMD_BRIDGE_IDENTIFY_RSP 0x0B
+#define CMD_BRIDGE_REBOOT_BL    0x0C
 #define CMD_RESET               0x7F
+
+#define ACK_OK                  0x00   // §6 ACK status
+#define ACK_INVALID_VALUE       0x03
+
+// BRIDGE_REBOOT_BOOTLOADER のマジック "BOT" (§6.4.6)。誤動作で書き込み不能な状態に
+// 落ちるのを防ぐため、一致しない限り再起動しない。
+#define REBOOT_BL_MAGIC0        0x42
+#define REBOOT_BL_MAGIC1        0x4F
+#define REBOOT_BL_MAGIC2        0x54
 
 #define TRANSPORT_USB           0x00   // §6.4.5 transport: 0x00=USB, 0x01=BLE
 #define TRANSPORT_BLE           0x01
@@ -167,10 +186,80 @@ static bool is_bridge_identify_req(const uint8_t *m, int n) {
            m[2] == SYSEX_SUB_ID && m[3] == CMD_BRIDGE_IDENTIFY_REQ;
 }
 
+// ---------------------------------------------------------------------------
+// BRIDGE_REBOOT_BOOTLOADER (0x0C, §6.4.6)
+//
+// FORCE_DOWNLOAD_BOOT を立ててリセットすると、次回起動時に ROM のダウンロード
+// モードで立ち上がる (= BOOT ボタンを押しながら電源投入したのと同じ状態)。
+// これで基板上の小さな BOOT ボタンを押さずに esptool / esptool-js から書き込める。
+//
+// 注意: ダウンロードモードに入ると MIDI デバイスとしては消える。通常動作に戻すには
+// 電源再投入かファーム書き込みが必要 (§6.4.6)。マジック必須にしているのはこのため。
+// ---------------------------------------------------------------------------
+static bool is_bridge_reboot_bl_req(const uint8_t *m, int n) {
+    return n >= 5 && m[0] == 0xF0 && m[1] == SYSEX_MFR_ID &&
+           m[2] == SYSEX_SUB_ID && m[3] == CMD_BRIDGE_REBOOT_BL;
+}
+
+static void enter_download_mode(void *arg) {
+    (void)arg;
+#if defined(CONFIG_IDF_TARGET_ESP32C6)
+    REG_SET_BIT(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT);
+#else
+    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+#endif
+    // esp_restart() ではなく ROM の system reset を使う。esp_restart() は
+    // ペリフェラル/RTC 周りのリセットを伴い、ROM がブートモードを読む前に
+    // FORCE_DOWNLOAD_BOOT が消えてしまう (実機 S3 で確認: コマンドは届いて
+    // 再起動もしたが通常モードで復帰した)。
+    esp_rom_software_reset_system();
+}
+
+/// ACK を返してから約 300ms 後に再起動する。ACK を送出しきる時間を確保するため
+/// 即時には落とさない (とくに BLE は次の接続イベントを待つ必要がある)。
+static void handle_bridge_reboot_bl(const uint8_t *m, int n,
+                                    void (*send)(const uint8_t *, int)) {
+    const uint8_t req_id = (n >= 6) ? m[4] : 0x00;
+    const bool ok = (n >= 9) && m[5] == REBOOT_BL_MAGIC0 &&
+                    m[6] == REBOOT_BL_MAGIC1 && m[7] == REBOOT_BL_MAGIC2;
+
+    uint8_t ack[8];
+    int i = 0;
+    ack[i++] = 0xF0;
+    ack[i++] = SYSEX_MFR_ID;
+    ack[i++] = SYSEX_SUB_ID;
+    ack[i++] = CMD_ACK;
+    ack[i++] = req_id;
+    ack[i++] = ok ? ACK_OK : ACK_INVALID_VALUE;
+    ack[i++] = CMD_BRIDGE_REBOOT_BL;
+    ack[i++] = 0xF7;
+    send(ack, i);
+
+    if (!ok) {
+        ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: bad magic -> ignored");
+        return;
+    }
+    ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: entering download mode in 300ms");
+    const esp_timer_create_args_t targs = {
+        .callback = enter_download_mode,
+        .name     = "reboot_bl",
+    };
+    esp_timer_handle_t t;
+    if (esp_timer_create(&targs, &t) == ESP_OK) {
+        esp_timer_start_once(t, 300 * 1000);
+    } else {
+        enter_download_mode(NULL);   // タイマーが取れなければ即時
+    }
+}
+
 static void on_ble_rx(const uint8_t *msg, int len) {
     if (is_bridge_identify_req(msg, len)) {
         ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST (BLE) -> self-answer");
         send_bridge_identify_response(TRANSPORT_BLE, ble_midi_notify);
+        return;
+    }
+    if (is_bridge_reboot_bl_req(msg, len)) {
+        handle_bridge_reboot_bl(msg, len, ble_midi_notify);
         return;
     }
     i2c_bridge_write(msg, len);   // それ以外は CH32 へ中継
@@ -182,6 +271,10 @@ static void on_usb_rx(const uint8_t *msg, int len) {
     if (is_bridge_identify_req(msg, len)) {
         ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST (USB) -> self-answer");
         send_bridge_identify_response(TRANSPORT_USB, usb_midi_bridge_notify);
+        return;
+    }
+    if (is_bridge_reboot_bl_req(msg, len)) {
+        handle_bridge_reboot_bl(msg, len, usb_midi_bridge_notify);
         return;
     }
     i2c_bridge_write(msg, len);
@@ -228,6 +321,37 @@ static void on_usb_state(bool mounted) {
 #endif
 
 // ---------------------------------------------------------------------------
+// 接続パラメータの実測ログ
+//
+// ble_gap_update_params() は「要求」でしかなく、セントラルが拒否しても
+// エラーにはならない。とくに Apple 系ホストはアクセサリ設計ガイドラインの
+// 条件 (Interval Min >= 15ms、Interval Max >= Interval Min + 15ms 等) を
+// 満たさない要求を **丸ごと拒否** する挙動が知られており、その場合はホストが
+// 選んだ既定値 (30ms 前後) のまま据え置かれる。
+//
+// macOS + BLE アダプタで HEART_BEAT の往復が平均 ~48ms かかっていた
+// (USB 経由の同じ ESP32→I2C→CH32 経路は 1.6ms) ため、実際に合意された値を
+// 出して確認する。conn_itvl は 1.25ms 単位、supervision_timeout は 10ms 単位。
+// ---------------------------------------------------------------------------
+static void log_conn_params(uint16_t conn_handle, const char *when) {
+    struct ble_gap_conn_desc desc;
+    if (ble_gap_conn_find(conn_handle, &desc) != 0) {
+        ESP_LOGW(TAG, "conn params (%s): ble_gap_conn_find failed", when);
+        return;
+    }
+    // 1.25ms 単位 → ms を整数演算で (newlib nano だと %f が出ないため)
+    unsigned itvl_x100 = (unsigned)desc.conn_itvl * 125u;
+    ESP_LOGI(TAG,
+             "conn params (%s): itvl=%u (%u.%02u ms) latency=%u timeout=%u (%u ms)",
+             when, desc.conn_itvl, itvl_x100 / 100u, itvl_x100 % 100u,
+             desc.conn_latency, desc.supervision_timeout,
+             (unsigned)desc.supervision_timeout * 10u);
+}
+
+/// Apple 準拠の再要求を 1 接続につき 1 回だけ行うためのフラグ。
+static bool s_conn_param_retried = false;
+
+// ---------------------------------------------------------------------------
 // GAP イベント
 // ---------------------------------------------------------------------------
 static int gap_event_handler(struct ble_gap_event *event, void *arg) {
@@ -237,7 +361,10 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             if (event->connect.status == 0) {
                 ESP_LOGI(TAG, "connected; conn_handle=%d", event->connect.conn_handle);
                 g_ble_connected = true;
+                s_conn_param_retried = false;
                 ble_midi_set_conn(event->connect.conn_handle);
+                // 要求前にホストが決めた値を出しておく (比較のため)
+                log_conn_params(event->connect.conn_handle, "on connect");
                 // レイテンシ低減のため connection interval を 7.5-15ms へ更新 (§2.3)。
                 struct ble_gap_upd_params p = {
                     .itvl_min = 6,    // 6 * 1.25ms = 7.5ms
@@ -245,7 +372,8 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                     .latency  = 0,
                     .supervision_timeout = 400,  // 4s
                 };
-                ble_gap_update_params(event->connect.conn_handle, &p);
+                int rc = ble_gap_update_params(event->connect.conn_handle, &p);
+                ESP_LOGI(TAG, "update_params request (7.5-15ms) rc=%d", rc);
             } else {
                 ESP_LOGW(TAG, "connect failed; status=%d", event->connect.status);
                 start_advertising();
@@ -260,6 +388,31 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 notify_ch32_disconnect();   // 最後のホストが消えた → CH32 の HID を解放
             }
             start_advertising();
+            return 0;
+
+        case BLE_GAP_EVENT_CONN_UPDATE:
+            // 接続パラメータが実際に変わったときに来る (要求が拒否された場合は
+            // 来ないか、status != 0 で来る)。合意された値をそのまま出す。
+            ESP_LOGI(TAG, "conn update; status=%d", event->conn_update.status);
+            log_conn_params(event->conn_update.conn_handle, "after update");
+            // 7.5-15ms の要求が通らなかった (= 15ms より粗いまま) 場合は、
+            // Apple のガイドラインを満たす 15-30ms で 1 回だけ再要求して、
+            // 「準拠した要求なら受け入れられるのか」を切り分ける。
+            if (!s_conn_param_retried) {
+                struct ble_gap_conn_desc d;
+                if (ble_gap_conn_find(event->conn_update.conn_handle, &d) == 0 &&
+                    d.conn_itvl > 12) {
+                    s_conn_param_retried = true;
+                    struct ble_gap_upd_params q = {
+                        .itvl_min = 12,   // 15ms   (Apple: Interval Min >= 15ms)
+                        .itvl_max = 24,   // 30ms   (Apple: Max >= Min + 15ms)
+                        .latency  = 0,
+                        .supervision_timeout = 400,  // 4s (Apple: <= 6s)
+                    };
+                    int rc2 = ble_gap_update_params(event->conn_update.conn_handle, &q);
+                    ESP_LOGI(TAG, "update_params retry (15-30ms) rc=%d", rc2);
+                }
+            }
             return 0;
 
         case BLE_GAP_EVENT_ADV_COMPLETE:
