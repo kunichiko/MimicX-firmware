@@ -210,23 +210,22 @@ static bool is_bridge_reboot_bl_req(const uint8_t *m, int n) {
 ///
 /// 手順が重要:
 ///   1. ACK が実際に送出されるのを待つ (BLE は次の接続イベントを待つ必要がある)
-///   2. **USB と BLE を明示的に切断する**
-///   3. ホストが切断を認識する猶予を置く
-///   4. FORCE_DOWNLOAD_BOOT を立てて ROM リセット
+///   2. BLE を明示切断する
+///   3. **USB を「リセット後の状態」へ戻してから**手放す (下記)
+///   4. ホストが切断を認識する猶予を置く
+///   5. FORCE_DOWNLOAD_BOOT を立てて ROM リセット
 ///
-/// BLE は明示切断できるが、**USB は切断してはいけない**。
-///
-/// tud_disconnect() でホストに切断を伝えると筋が良さそうに見えるが、S3 では
-/// USB プルアップの制御が **RTC ドメイン**のレジスタにあり、
-/// esp_rom_software_reset_system() (デジタルシステムのみのリセット) では
-/// クリアされない。結果、プルアップが外れたままリセットされ、ROM が
-/// ダウンロードモードで起動してもバス上に現れず、デバイスが USB から
-/// 完全に消える (実機 S3 で発生。抜き差し = 電源断でのみ復旧した)。
-///
-/// 既知の副作用: USB を畳まずに落とすため、ホストによっては古いエンドポイントを
+/// USB の扱いには落とし穴がある。何もせずに落とすとホストが古いエンドポイントを
 /// 掴んだままになり「列挙はされているのに MIDI に無応答」になることがある
-/// (macOS で発生)。その場合は抜き差しで復旧する — tools/reboot_bridge.sh の
-/// 説明を参照。ホストへ切断を伝えつつ ROM が再列挙できる方法は見つかっていない。
+/// (macOS で発生。抜き差しでのみ復旧した)。かといって tud_disconnect() で
+/// D+ プルアップを外すだけだと、PHY 設定を手放さないまま落ちる。S3 では
+/// その設定が **RTC ドメイン**にあり esp_rom_software_reset_system()
+/// (デジタルシステムのみのリセット) でクリアされないため、ROM がバス上に現れない。
+///
+/// tinyusb_driver_uninstall() は TinyUSB 停止に加えて **USB PHY を削除する**ので、
+/// ホストには切断が伝わり、かつ ROM 側が PHY を構成し直せる。加えて PHY の
+/// ルーティング選択 (OTG ⇄ USB Serial/JTAG) は IDF 側で戻されないため、
+/// ここで明示的にハードウェア制御へ戻す。
 static void reboot_bl_task(void *arg) {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(300));      // ACK 送出待ち
@@ -235,6 +234,18 @@ static void reboot_bl_task(void *arg) {
         ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
         vTaskDelay(pdMS_TO_TICKS(100));  // 切断が飛ぶ猶予
     }
+#if defined(BOARD_HAS_USB_MIDI)
+    usb_midi_bridge_teardown();          // TinyUSB 停止 + USB PHY 削除
+    // usb_del_phy() はプル override は戻すが (usb_wrap_hal_phy_disable_pull_override)、
+    // PHY のルーティング選択は戻さない (phy_uninstall は USB ペリフェラルを
+    // disable するだけ)。S3 では内部 PHY を OTG に繋ぐか USB Serial/JTAG に繋ぐかが
+    // RTC ドメインの RTC_CNTL_USB_CONF_REG で決まるので、ハードウェア制御
+    // (eFuse/strapping の既定 = ROM が期待する状態) へ戻す。
+    REG_CLR_BIT(RTC_CNTL_USB_CONF_REG,
+                RTC_CNTL_SW_HW_USB_PHY_SEL | RTC_CNTL_SW_USB_PHY_SEL);
+    REG_CLR_BIT(RTC_CNTL_USB_CONF_REG, RTC_CNTL_USB_PAD_ENABLE_OVERRIDE);
+    vTaskDelay(pdMS_TO_TICKS(150));      // ホストが切断を処理する猶予
+#endif
 
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     REG_SET_BIT(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT);

@@ -189,6 +189,15 @@ bool usb_midi_bridge_mounted(void) {
     return tud_ready();
 }
 
+void usb_midi_bridge_teardown(void) {
+    // tinyusb_driver_uninstall は「USB イベントタスク停止 → TinyUSB スタック
+    // 破棄 → ディスクリプタ資源解放 → **USB PHY 削除**」まで行う。PHY を削除
+    // させるのが肝で、これによりホストには切断が伝わり、かつ ROM が自分で
+    // PHY を構成し直せる (§6.4.6)。
+    esp_err_t e = tinyusb_driver_uninstall();
+    if (e != ESP_OK) ESP_LOGW(TAG, "tinyusb_driver_uninstall rc=%d", (int)e);
+}
+
 void usb_midi_bridge_notify(const uint8_t *msg, int n) {
     if (n <= 0 || !tud_ready()) return;
     // tud_midi_stream_write が USB-MIDI イベントパケットへの分割 (SysEx の

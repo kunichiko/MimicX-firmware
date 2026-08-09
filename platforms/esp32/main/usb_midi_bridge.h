@@ -26,3 +26,10 @@ void usb_midi_bridge_notify(const uint8_t *msg, int n);
 
 // USB ホストにマウントされているか (configured 状態)。
 bool usb_midi_bridge_mounted(void);
+
+// TinyUSB を停止し USB PHY を削除する (tinyusb_driver_uninstall)。
+// ROM ダウンロードモードへ落ちる直前に呼ぶ (§6.4.6)。ホストには切断として見え、
+// かつ PHY 設定を手放すので ROM が自分で構成し直せる。
+// tud_disconnect() だけでは D+ プルアップを外すのみで PHY を手放さず、S3 では
+// その設定が RTC ドメインに残ってリセット後に ROM がバス上に現れなくなる。
+void usb_midi_bridge_teardown(void);

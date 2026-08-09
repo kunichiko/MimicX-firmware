@@ -36,11 +36,20 @@ fi
 
 echo
 echo "--- 列挙の変化を待っています (最大 10 秒) ---"
+# ROM ダウンロードモードの製品名は一通りではない。実測で少なくとも
+#   "ESP32_S3"                    (OTG 経由で落ちたとき)
+#   "USB JTAG_serial debug unit"  (USB Serial/JTAG 経由で落ちたとき)
+# の 2 通りがあり、名前だけで判定すると入っているのに失敗と誤判定する
+# (実際に誤判定して原因調査を誤った)。新しいシリアルポートの出現も併せて見る。
+before=$(ls /dev/cu.usbmodem* 2>/dev/null | sort | tr '\n' ' ')
 i=0
 while [ $i -lt 20 ]; do
-    if ioreg -p IOUSB -w0 -l 2>/dev/null | grep -q '"USB Product Name" = "ESP32_S3"'; then
+    names=$(ioreg -p IOUSB -w0 -l 2>/dev/null | grep -oE '"USB Product Name" = "[^"]*"')
+    now=$(ls /dev/cu.usbmodem* 2>/dev/null | sort | tr '\n' ' ')
+    if echo "$names" | grep -qE 'ESP32_S3|USB JTAG' || [ "$now" != "$before" ]; then
         echo "ダウンロードモードに入りました:"
         ls /dev/cu.usbmodem* 2>/dev/null
+        echo "(esptool で接続確認するとより確実です)"
         exit 0
     fi
     sleep 0.5
