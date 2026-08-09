@@ -104,6 +104,8 @@ static const char *TAG = "mimicx";
 
 static uint8_t g_addr_type;
 static volatile bool g_ble_connected = false;   // GAP 接続状態 (切断通知の判定用)
+// 現在の GAP 接続ハンドル。ダウンロードモードへ落ちる前に明示切断するのに使う。
+static volatile uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 
 static void start_advertising(void);
 
@@ -201,8 +203,39 @@ static bool is_bridge_reboot_bl_req(const uint8_t *m, int n) {
            m[2] == SYSEX_SUB_ID && m[3] == CMD_BRIDGE_REBOOT_BL;
 }
 
-static void enter_download_mode(void *arg) {
+/// ダウンロードモードへ落ちるまでの一連の後始末を行うタスク。
+///
+/// 遅延を挟む必要があるので esp_timer コールバックではなく専用タスクにしている
+/// (esp_timer のコールバックは共有タスク上で走るためブロックさせたくない)。
+///
+/// 手順が重要:
+///   1. ACK が実際に送出されるのを待つ (BLE は次の接続イベントを待つ必要がある)
+///   2. **USB と BLE を明示的に切断する**
+///   3. ホストが切断を認識する猶予を置く
+///   4. FORCE_DOWNLOAD_BOOT を立てて ROM リセット
+///
+/// BLE は明示切断できるが、**USB は切断してはいけない**。
+///
+/// tud_disconnect() でホストに切断を伝えると筋が良さそうに見えるが、S3 では
+/// USB プルアップの制御が **RTC ドメイン**のレジスタにあり、
+/// esp_rom_software_reset_system() (デジタルシステムのみのリセット) では
+/// クリアされない。結果、プルアップが外れたままリセットされ、ROM が
+/// ダウンロードモードで起動してもバス上に現れず、デバイスが USB から
+/// 完全に消える (実機 S3 で発生。抜き差し = 電源断でのみ復旧した)。
+///
+/// 既知の副作用: USB を畳まずに落とすため、ホストによっては古いエンドポイントを
+/// 掴んだままになり「列挙はされているのに MIDI に無応答」になることがある
+/// (macOS で発生)。その場合は抜き差しで復旧する — tools/reboot_bridge.sh の
+/// 説明を参照。ホストへ切断を伝えつつ ROM が再列挙できる方法は見つかっていない。
+static void reboot_bl_task(void *arg) {
     (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(300));      // ACK 送出待ち
+
+    if (g_ble_connected && s_conn_handle != BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_terminate(s_conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        vTaskDelay(pdMS_TO_TICKS(100));  // 切断が飛ぶ猶予
+    }
+
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     REG_SET_BIT(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT);
 #else
@@ -215,7 +248,7 @@ static void enter_download_mode(void *arg) {
     esp_rom_software_reset_system();
 }
 
-/// ACK を返してから約 300ms 後に再起動する。ACK を送出しきる時間を確保するため
+/// ACK を返してから後始末タスクを起こす。ACK を送出しきる時間を確保するため
 /// 即時には落とさない (とくに BLE は次の接続イベントを待つ必要がある)。
 static void handle_bridge_reboot_bl(const uint8_t *m, int n,
                                     void (*send)(const uint8_t *, int)) {
@@ -239,17 +272,8 @@ static void handle_bridge_reboot_bl(const uint8_t *m, int n,
         ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: bad magic -> ignored");
         return;
     }
-    ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: entering download mode in 300ms");
-    const esp_timer_create_args_t targs = {
-        .callback = enter_download_mode,
-        .name     = "reboot_bl",
-    };
-    esp_timer_handle_t t;
-    if (esp_timer_create(&targs, &t) == ESP_OK) {
-        esp_timer_start_once(t, 300 * 1000);
-    } else {
-        enter_download_mode(NULL);   // タイマーが取れなければ即時
-    }
+    ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: entering download mode");
+    xTaskCreate(reboot_bl_task, "reboot_bl", 3072, NULL, 5, NULL);
 }
 
 static void on_ble_rx(const uint8_t *msg, int len) {
@@ -359,6 +383,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             if (event->connect.status == 0) {
                 ESP_LOGI(TAG, "connected; conn_handle=%d", event->connect.conn_handle);
                 g_ble_connected = true;
+                s_conn_handle = event->connect.conn_handle;
                 ble_midi_set_conn(event->connect.conn_handle);
                 // 要求前にホストが決めた値を出しておく (比較のため)
                 log_conn_params(event->connect.conn_handle, "on connect");
@@ -393,6 +418,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnect; reason=%d", event->disconnect.reason);
             g_ble_connected = false;
+            s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
             ble_midi_set_conn(BLE_HS_CONN_HANDLE_NONE);
             if (!any_other_host_connected_than_ble()) {
                 notify_ch32_disconnect();   // 最後のホストが消えた → CH32 の HID を解放
