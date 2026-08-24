@@ -131,6 +131,21 @@ Web フラッシャー (`docs/firmware/`) は GitHub Releases API で版とノ�
 完了後)。pull request / `workflow_dispatch` ではビルド検証のみで Release は作成
 されない (上記 2 ジョブ目以降がスキップされる)。
 
+## ライセンス
+
+**Apache License 2.0** ([`LICENSE`](LICENSE))。商標・USB PID の扱いと、ビルド時に
+取得される第三者依存関係 (ch32v003fun = MIT, ESP-IDF = Apache-2.0) については
+[`NOTICE`](NOTICE) を参照してください。第三者コードの vendoring はありません。
+
+プロジェクト全体のライセンス構成:
+
+| リポジトリ | ライセンス |
+|---|---|
+| MimicX-hardware | CERN-OHL-S-2.0 (`tools/` のみ Apache-2.0) |
+| **MimicX-firmware** | **Apache License 2.0** |
+| MimicX-app | Apache License 2.0 |
+| MimicX-protocol | CC BY 4.0 |
+
 ## 関連リポジトリ
 
 - [MimicX-protocol](https://github.com/kunichiko/MimicX-protocol) - MIDI通信プロトコルライブラリ

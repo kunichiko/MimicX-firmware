@@ -1,0 +1,56 @@
+Mimic X — firmware
+Copyright 2026 Kunihiko Ohnaka
+
+Licensed under the Apache License, Version 2.0 (the "License"); see ./LICENSE.
+
+
+商標について
+------------------------------------------------------------------------
+以下は Apache License 2.0 の許諾範囲には含まれません
+(Apache License 2.0 第6条を参照)。
+
+  "Mimic X"     正式名称
+  "MimicX"      短縮形 (リポジトリ名・ファイル名・識別子等で用いる)
+  USB / BLE のデバイス名として送出する製品名文字列
+
+大文字小文字の違い、空白の有無、およびこれらと混同を生じるおそれのある
+表記を含みます。
+
+本ファームウェアを改変したものを頒布する場合は、これらとは異なる名称を
+用いてください。公式版との混同を避け、利用者がサポートの出所を判断できる
+ようにするための措置です。
+
+
+USB VID / PID
+------------------------------------------------------------------------
+  0x1209:0x9210   Mimic X
+  0x1209:0x9211   Mimic X Bridge
+
+pid.codes (https://pid.codes) に申請中です
+(https://github.com/pidcodes/pidcodes.github.com/pull/1210)。
+
+本ファームウェアを改変したものを頒布する場合、これらの PID をそのまま用いると
+USB 機器の識別が衝突し、ホスト側のドライバやアプリが誤動作します。pid.codes
+から自分の PID を取得してください。
+
+
+第三者コードについて
+------------------------------------------------------------------------
+第三者のコードはこのリポジトリに取り込んでいません (vendoring なし)。
+ビルド時に取得される依存関係は、それぞれの権利者のライセンスに従います。
+
+  ch32v003fun / platform-ch32v          MIT           CH32X035 ビルド
+      https://github.com/cnlohr/ch32v003fun
+      https://github.com/Community-PIO-CH32V/platform-ch32v
+  ESP-IDF (TinyUSB / NimBLE を含む)     Apache-2.0    ESP32 系ビルド
+      https://github.com/espressif/esp-idf
+
+依存関係の宣言は platforms/*/platformio.ini および
+platforms/esp32*/CMakeLists.txt にあります。
+
+
+姉妹リポジトリのライセンス
+------------------------------------------------------------------------
+  MimicX-hardware   CERN-OHL-S-2.0  (tools/ のみ Apache-2.0)
+  MimicX-app        Apache License 2.0
+  MimicX-protocol   CC BY 4.0
