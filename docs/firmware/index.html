@@ -262,6 +262,18 @@
 
         const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
 
+        // これより古い版は docs/firmware/firmwares/ から bin を削除済み (Release 自体は
+        // 残っているので API には出てくる)。一覧に出すと選択時に 404 になるため除外する。
+        const MIN_VERSION = [1, 2, 0];
+        function isListedVersion(tag) {
+            const v = (/^v(\d+)\.(\d+)\.(\d+)$/.exec(tag) || []).slice(1).map(Number);
+            if (v.length !== 3) return false;
+            for (let i = 0; i < 3; i++) {
+                if (v[i] !== MIN_VERSION[i]) return v[i] > MIN_VERSION[i];
+            }
+            return true;
+        }
+
         // GitHub Releases API からバージョン情報とリリースノートを集めて VARIANTS に
         // 反映する。アセット本体 (.bin) は CORS の都合で API の URL を直接 fetch できない
         // (release-assets.githubusercontent.com への redirect 先が CORS ヘッダを返さない)
@@ -276,6 +288,7 @@
             // release は published_at が新しい順で来るのでそのまま使う
             for (const rel of releases) {
                 const tag = rel.tag_name;
+                if (!isListedVersion(tag)) continue;
                 const date = (rel.published_at || '').slice(0, 10);
                 const note = (rel.body || '').trim();
                 for (const a of rel.assets || []) {

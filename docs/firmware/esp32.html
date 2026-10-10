@@ -149,6 +149,18 @@
         const VARIANTS = { joystick: [], keyboard: [], combined: [] };
         const RELEASES_API = 'https://api.github.com/repos/kunichiko/MimicX-firmware/releases?per_page=100';
 
+        // これより古い版は docs/firmware/firmwares/ から bin を削除済み (Release 自体は
+        // 残っているので API には出てくる)。一覧に出すと選択時に 404 になるため除外する。
+        const MIN_VERSION = [1, 2, 0];
+        function isListedVersion(tag) {
+            const v = (/^v(\d+)\.(\d+)\.(\d+)$/.exec(tag) || []).slice(1).map(Number);
+            if (v.length !== 3) return false;
+            for (let i = 0; i < 3; i++) {
+                if (v[i] !== MIN_VERSION[i]) return v[i] > MIN_VERSION[i];
+            }
+            return true;
+        }
+
         // アセット名規約 (CORS の都合で bin は同一オリジン docs/firmware/firmwares/ から取得):
         //   mimicx-<board>_<variant>_v<ver>.bin        merged (0x0 一括書き。初回/フォールバック用)
         //   mimicx-<board>_<variant>_v<ver>_app.bin    app 単体 (0x10000)
@@ -165,6 +177,7 @@
             if (!res.ok) throw new Error(`Releases API HTTP ${res.status}`);
             const releases = await res.json();
             for (const rel of releases) {
+                if (!isListedVersion(rel.tag_name)) continue;
                 const date = (rel.published_at || '').slice(0, 10);
                 const note = (rel.body || '').trim();
                 // bootloader / ptable (variant 共通) を先に拾う
