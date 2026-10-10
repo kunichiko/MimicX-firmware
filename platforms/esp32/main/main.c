@@ -32,11 +32,16 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_rom_sys.h"   // esp_rom_software_reset_system (§6.4.6)
-// FORCE_DOWNLOAD_BOOT (§6.4.6)。C6 は LP_AON、それ以外は RTC_CNTL 配下。
+// FORCE_DOWNLOAD_BOOT (§6.4.6)。C6 は LP_AON、S3/C3 は RTC_CNTL 配下。
+// 無印 ESP32 にはこのレジスタが無く、ソフトウェアからダウンロードモードに入れない
+// (GPIO0 ストラップのみ)。DevKit は USB-UART の DTR/RTS 自動リセットで esptool が
+// 入れるので不要。無印では本コマンドを UNKNOWN_COMMAND で断る。
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
 #include "soc/lp_aon_reg.h"
-#else
+#define BRIDGE_CAN_FORCE_DOWNLOAD 1
+#elif !defined(CONFIG_IDF_TARGET_ESP32)
 #include "soc/rtc_cntl_reg.h"
+#define BRIDGE_CAN_FORCE_DOWNLOAD 1
 #endif
 
 #include "nimble/nimble_port.h"
@@ -91,6 +96,7 @@ static const char *TAG = "mimicx";
 #define CMD_RESET               0x7F
 
 #define ACK_OK                  0x00   // §6 ACK status
+#define ACK_UNKNOWN_COMMAND     0x01
 #define ACK_INVALID_VALUE       0x03
 
 // BRIDGE_REBOOT_BOOTLOADER のマジック "BOT" (§6.4.6)。誤動作で書き込み不能な状態に
@@ -226,6 +232,7 @@ static bool is_bridge_reboot_bl_req(const uint8_t *m, int n) {
 /// ホストには切断が伝わり、かつ ROM 側が PHY を構成し直せる。加えて PHY の
 /// ルーティング選択 (OTG ⇄ USB Serial/JTAG) は IDF 側で戻されないため、
 /// ここで明示的にハードウェア制御へ戻す。
+#if defined(BRIDGE_CAN_FORCE_DOWNLOAD)
 static void reboot_bl_task(void *arg) {
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(300));      // ACK 送出待ち
@@ -249,7 +256,7 @@ static void reboot_bl_task(void *arg) {
 
 #if defined(CONFIG_IDF_TARGET_ESP32C6)
     REG_SET_BIT(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT);
-#else
+#elif defined(BRIDGE_CAN_FORCE_DOWNLOAD)
     REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
 #endif
     // esp_restart() ではなく ROM の system reset を使う。esp_restart() は
@@ -258,6 +265,7 @@ static void reboot_bl_task(void *arg) {
     // 再起動もしたが通常モードで復帰した)。
     esp_rom_software_reset_system();
 }
+#endif  // BRIDGE_CAN_FORCE_DOWNLOAD
 
 /// ACK を返してから後始末タスクを起こす。ACK を送出しきる時間を確保するため
 /// 即時には落とさない (とくに BLE は次の接続イベントを待つ必要がある)。
@@ -266,6 +274,11 @@ static void handle_bridge_reboot_bl(const uint8_t *m, int n,
     const uint8_t req_id = (n >= 6) ? m[4] : 0x00;
     const bool ok = (n >= 9) && m[5] == REBOOT_BL_MAGIC0 &&
                     m[6] == REBOOT_BL_MAGIC1 && m[7] == REBOOT_BL_MAGIC2;
+#if defined(BRIDGE_CAN_FORCE_DOWNLOAD)
+    const uint8_t status = ok ? ACK_OK : ACK_INVALID_VALUE;
+#else
+    const uint8_t status = ACK_UNKNOWN_COMMAND;   // 無印 ESP32: 非対応
+#endif
 
     uint8_t ack[8];
     int i = 0;
@@ -274,17 +287,23 @@ static void handle_bridge_reboot_bl(const uint8_t *m, int n,
     ack[i++] = SYSEX_SUB_ID;
     ack[i++] = CMD_ACK;
     ack[i++] = req_id;
-    ack[i++] = ok ? ACK_OK : ACK_INVALID_VALUE;
+    ack[i++] = status;
     ack[i++] = CMD_BRIDGE_REBOOT_BL;
     ack[i++] = 0xF7;
     send(ack, i);
 
+    if (status == ACK_UNKNOWN_COMMAND) {
+        ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: not supported on this chip");
+        return;
+    }
     if (!ok) {
         ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: bad magic -> ignored");
         return;
     }
+#if defined(BRIDGE_CAN_FORCE_DOWNLOAD)
     ESP_LOGW(TAG, "BRIDGE_REBOOT_BOOTLOADER: entering download mode");
     xTaskCreate(reboot_bl_task, "reboot_bl", 3072, NULL, 5, NULL);
+#endif
 }
 
 static void on_ble_rx(const uint8_t *msg, int len) {
