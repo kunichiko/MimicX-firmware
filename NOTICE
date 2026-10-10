@@ -26,8 +26,8 @@ USB VID / PID
   0x1209:0x9210   Mimic X
   0x1209:0x9211   Mimic X Bridge
 
-pid.codes (https://pid.codes) に申請中です
-(https://github.com/pidcodes/pidcodes.github.com/pull/1210)。
+pid.codes (https://pid.codes) から割り当てを受けています
+(https://pid.codes/1209/9210/ , https://pid.codes/1209/9211/)。
 
 本ファームウェアを改変したものを頒布する場合、これらの PID をそのまま用いると
 USB 機器の識別が衝突し、ホスト側のドライバやアプリが誤動作します。pid.codes

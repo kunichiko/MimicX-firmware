@@ -31,10 +31,11 @@
 // ---------------------------------------------------------------------------
 // USB IDs
 // ---------------------------------------------------------------------------
-// pid.codes test PIDs (https://pid.codes/)
-// TODO: 製品化時は正式な VID/PID を取得すること
+// pid.codes で割り当て済み (https://pid.codes/1209/9210/)
+//   0x1209:0x9210 = Mimic X (本機)、0x1209:0x9211 = Mimic X Bridge (ESP32)
+// 改変版を頒布する場合は自分の PID を取得すること (NOTICE 参照)
 #define FUSB_USB_VID 0x1209
-#define FUSB_USB_PID 0x0001
+#define FUSB_USB_PID 0x9210
 #define FUSB_USB_REV 0x0100
 #define FUSB_STR_MANUFACTURER u"kunichiko"
 // iProduct は variant ごとに board_config.h で固定。

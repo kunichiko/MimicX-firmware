@@ -39,10 +39,11 @@ static void (*s_on_state)(bool mounted);
 // ---------------------------------------------------------------------------
 // USB ディスクリプタ
 // ---------------------------------------------------------------------------
-// VID/PID: Espressif の開発用 VID 0x303A を使用 (esp_tinyusb 既定と同じ流儀)。
-// PID は MimicX ブリッジ用に 0x8000 台の任意値。製品化時は要検討。
-#define USB_VID   0x303A
-#define USB_PID   0x82A0
+// VID/PID: pid.codes で割り当て済み (https://pid.codes/1209/9211/)。
+// 0x1209:0x9211 = Mimic X Bridge (CH32 本体は 0x9210)。
+// 改変版を頒布する場合は自分の PID を取得すること (NOTICE 参照)
+#define USB_VID   0x1209
+#define USB_PID   0x9211
 #define EPNUM_MIDI_OUT  0x01
 #define EPNUM_MIDI_IN   0x81
 
