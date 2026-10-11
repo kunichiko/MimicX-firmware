@@ -61,6 +61,7 @@ static inline int usb_midi_control_change(uint8_t channel, uint8_t control, uint
 
 // Send raw SysEx data (handles fragmentation into 4-byte USB-MIDI packets)
 int usb_midi_send_sysex(const uint8_t* data, int len);
+int usb_midi_tx_free(void);
 
 // Receive a 4-byte USB-MIDI event packet from host
 // Returns number of bytes read (4 if event available, 0 if none)

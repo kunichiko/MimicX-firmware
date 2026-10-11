@@ -125,18 +125,26 @@ static volatile uint32_t md6_lut_rising[4];
 // → 4 エッジで 1 サイクル完結。アイドル後は両 DMA ポインタが先頭に戻る。
 // ---------------------------------------------------------------------------
 
-// 累積デルタ (CC 受信時に更新、サイクル完了時に 0 クリア)。
-// MSX 側がいま読んでいる現在値を直接保持する形にした。CC が来たら on_cc で
-// 即時加算し LUT もすぐ書き換える。サイクル完了で 0 クリアすることで連続
-// ポーリングでもドリフトしない。
-static volatile int8_t  msx_dx_acc = 0;
-static volatile int8_t  msx_dy_acc = 0;
+// 未報告の累積デルタ (CC 受信時に加算)。1 サイクルで報告できるのは int8 の範囲
+// なので、超過分は次サイクル以降へ持ち越す。
+#define MSX_ACC_MAX 1024
+static volatile int16_t msx_dx_acc = 0;
+static volatile int16_t msx_dy_acc = 0;
+// LUT に載せている (= 現サイクルで報告中の) 値。サイクル完了時に acc から
+// この分だけ差し引く。0 クリアではなく差し引きにすることで、読み取り中や
+// 読み取り直後 (アイドル判定前) に届いた CC を次サイクルへ持ち越せる。
+static volatile int8_t  msx_dx_rep = 0;
+static volatile int8_t  msx_dy_rep = 0;
+// 読み取りサイクル中フラグ (最初の STROBE エッジでセット、サイクル完了でクリア)。
+// サイクル中は LUT を書き換えない (X 上位/下位で別の値が読まれる tearing を防ぐ)。
+static volatile uint8_t msx_in_cycle = 0;
 // 1 MSX 読み取りサイクル = 4 byte (= 8 nibble = 4 H + 4 L) で 4 fallings を含む。
 // 旧 Original protocol では mouse は byte 3/4 を要求されたら byte 1/2 を繰り返し
 // 返す挙動が標準。MSX View は 8 nibble 読みでこの繰り返しを期待していると思われる
-// ため、サイクル末 (4 falling 目) で初めて acc を 0 リセットして次サイクルへ。
-// 2 falling 目で mid-cycle にリセットすると byte 3/4 = 0 になり、MSX View 側で
+// ため、サイクル末 (4 falling 目) で初めてサイクル完了として次サイクルへ。
+// 2 falling 目で mid-cycle に完了させると byte 3/4 = 0 になり、MSX View 側で
 // byte 1/2 と byte 3/4 の不一致から異常動作 (右下ドリフト) する。
+// FM TOWNS は 1 サイクル 4 nibble (2 falling) なので 3ms アイドルで完了する。
 // falling のみを数える理由は、初期 strobe 状態 (HIGH/LOW) に依存しないため。
 static volatile uint8_t msx_falling_count = 0;
 // ボタン状態 (1 = 押下, 0 = リリース)。
@@ -162,7 +170,8 @@ static uint32_t msx_pack_nibble(uint8_t nibble) {
     return set | (reset << 16);
 }
 
-// 累積デルタから LUT を再構築。CC 受信時 / アイドル 0 クリア時 / モード切替時に呼ぶ。
+// 累積デルタから報告値 (rep) を決めて LUT を再構築。サイクル外での CC 受信時 /
+// サイクル完了時 / モード切替時に呼ぶ。
 //
 // 重要: MSX BIOS は読み取り生バイトを 2 の補数で 否定 (NEG) してデルタを返す。
 //   PAD(13) = -byte_raw_signed
@@ -177,14 +186,47 @@ static uint32_t msx_pack_nibble(uint8_t nibble) {
 //   acc =  0 → V = -1 = 0xFF → 全 D LOW → BIOS reads 0x00 → NEG = 0 (no drift)
 //   acc = +5 → V = +4 = 0x04 → BIOS reads 0xFB → NEG = +5
 //   acc = -3 → V = -4 = 0xFC → BIOS reads 0x03 → NEG = -3
+static int8_t msx_clamp8(int16_t v) {
+    return (int8_t)(v > 127 ? 127 : (v < -128 ? -128 : v));
+}
+
 static void msx_rebuild_lut(void) {
+    int8_t rx = msx_clamp8(msx_dx_acc);
+    int8_t ry = msx_clamp8(msx_dy_acc);
+    msx_dx_rep = rx;
+    msx_dy_rep = ry;
     // (int) 経由で減算してオーバーフロー UB を避け、最後に 8bit に切り詰める。
-    uint8_t x = (uint8_t)((int)msx_dx_acc - 1);
-    uint8_t y = (uint8_t)((int)msx_dy_acc - 1);
-    msx_lut_rising[0]  = msx_pack_nibble((x >> 4) & 0x0F);  // X 上位
-    msx_lut_falling[0] = msx_pack_nibble(x & 0x0F);          // X 下位
-    msx_lut_rising[1]  = msx_pack_nibble((y >> 4) & 0x0F);  // Y 上位
-    msx_lut_falling[1] = msx_pack_nibble(y & 0x0F);          // Y 下位
+    uint8_t x = (uint8_t)((int)rx - 1);
+    uint8_t y = (uint8_t)((int)ry - 1);
+    // DMA がエッジで読む途中に書き換わる窓を最小化するため、先に全部計算してから格納。
+    uint32_t xh = msx_pack_nibble((x >> 4) & 0x0F);
+    uint32_t xl = msx_pack_nibble(x & 0x0F);
+    uint32_t yh = msx_pack_nibble((y >> 4) & 0x0F);
+    uint32_t yl = msx_pack_nibble(y & 0x0F);
+    msx_lut_rising[0]  = xh;  // X 上位
+    msx_lut_falling[0] = xl;  // X 下位
+    msx_lut_rising[1]  = yh;  // Y 上位
+    msx_lut_falling[1] = yl;  // Y 下位
+}
+
+// サイクル完了 (ISR から呼ぶ): 報告済みの分を差し引き、残りで次サイクルの LUT を作る。
+static void msx_end_cycle(void) {
+    if (msx_in_cycle) {
+        msx_dx_acc -= msx_dx_rep;
+        msx_dy_acc -= msx_dy_rep;
+        msx_in_cycle = 0;
+    }
+    msx_falling_count = 0;
+    msx_rebuild_lut();
+}
+
+// 累積・報告値・サイクル状態をすべて初期化する (モード切替 / release_all 時)。
+static void msx_reset_motion(void) {
+    msx_dx_acc = 0;
+    msx_dy_acc = 0;
+    msx_in_cycle = 0;
+    msx_falling_count = 0;
+    msx_rebuild_lut();
 }
 
 // 左右ボタンを D4/D5 ピンに反映する (active-low、押下中は LOW)。
@@ -195,6 +237,75 @@ static void msx_update_button_pins(void) {
     if (msx_btn_right) GPIOA->BCR  = (1 << PIN_D5);
     else               GPIOA->BSHR = (1 << PIN_D5);
 }
+
+#ifdef MSX_DIAG
+// ---------------------------------------------------------------------------
+// 診断: MSX マウスモードの STROBE エッジ列を記録して SysEx でダンプする。
+// CC 0x7F を受けると記録開始、DIAG_N 件たまったら poll() で 1 件ずつ送出。
+//   F0 7D 44 <idx_hi> <idx_lo> <kind> <out> <in> <th> <fcnt> <ax_lo> <ax_hi>
+//      <t0..t4 (32bit SysTick, 7bit LE)> <lat0..lat2 (16bit, 7bit LE)> F7
+//   kind: bit0 = falling(CC1), bit1 = rising(CC2), 4 = TIM3 idle
+//   out/in: D0-D3 の出力レジスタ / 入力レベル (= ホストが読むビット値)
+// ---------------------------------------------------------------------------
+#include "usb_midi.h"
+#define DIAG_N 128
+typedef struct {
+    uint32_t t;
+    uint16_t lat;
+    uint8_t kind, out, in, th, fcnt;
+    int8_t ax;
+} diag_ent_t;
+static diag_ent_t diag_buf[DIAG_N];
+static volatile uint16_t diag_n = DIAG_N;   // DIAG_N = 非記録中
+static volatile uint8_t diag_dumping = 0;
+static uint16_t diag_dump_i = 0;
+
+static inline uint8_t diag_nibble(uint32_t r) {
+    return ((r >> PIN_D0) & 1) | (((r >> PIN_D1) & 1) << 1) |
+           (((r >> PIN_D2) & 1) << 2) | (((r >> PIN_D3) & 1) << 3);
+}
+
+static void diag_record(uint8_t kind, uint16_t lat) {
+    uint16_t n = diag_n;
+    if (n >= DIAG_N) return;
+    diag_ent_t* e = &diag_buf[n];
+    e->t    = (uint32_t)SysTick->CNT;
+    e->lat  = lat;
+    e->kind = kind;
+    e->out  = diag_nibble(GPIOA->OUTDR);
+    e->in   = diag_nibble(GPIOA->INDR);
+    e->th   = (GPIOA->INDR >> PIN_TH) & 1;
+    e->fcnt = msx_falling_count;
+    e->ax   = msx_dx_rep;
+    diag_n = n + 1;
+    if (n + 1 >= DIAG_N) { diag_dump_i = 0; diag_dumping = 1; }
+}
+
+static void diag_poll(void) {
+    if (!diag_dumping) return;
+    while (diag_dump_i <= DIAG_N && usb_midi_tx_free() >= 8) {
+        uint8_t m[24];
+        int i = 0;
+        m[i++] = 0xF0; m[i++] = 0x7D; m[i++] = 0x44;
+        if (diag_dump_i == DIAG_N) {  // 終端
+            m[i++] = 0x7F; m[i++] = 0x7F; m[i++] = 0xF7;
+            usb_midi_send_sysex(m, i);
+            diag_dumping = 0;
+            return;
+        }
+        const diag_ent_t* e = &diag_buf[diag_dump_i];
+        m[i++] = (diag_dump_i >> 7) & 0x7F;
+        m[i++] = diag_dump_i & 0x7F;
+        m[i++] = e->kind; m[i++] = e->out; m[i++] = e->in; m[i++] = e->th; m[i++] = e->fcnt;
+        m[i++] = (uint8_t)e->ax & 0x7F; m[i++] = ((uint8_t)e->ax >> 7) & 1;
+        for (int k = 0; k < 5; k++) m[i++] = (e->t >> (7 * k)) & 0x7F;
+        for (int k = 0; k < 3; k++) m[i++] = (e->lat >> (7 * k)) & 0x7F;
+        m[i++] = 0xF7;
+        usb_midi_send_sysex(m, i);
+        diag_dump_i++;
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // リブルラブル XPD-1LR: 左右レバーを TH で時分割多重
@@ -401,20 +512,25 @@ void TIM2_CC_IRQHandler(void) {
     // フラグの読み取りはクリア前に行う必要がある (どちらのエッジが起きたかの判定)。
     uint32_t intfr = TIM2->INTFR;
     TIM2->INTFR = ~(TIM_CC1IF | TIM_CC2IF);
+#ifdef MSX_DIAG
+    if (pad_mode == PAD_MODE_MSX_MOUSE) {
+        uint16_t cap = (intfr & TIM_CC1IF) ? TIM2->CH1CVR : TIM2->CH2CVR;
+        diag_record((intfr & TIM_CC1IF ? 1 : 0) | (intfr & TIM_CC2IF ? 2 : 0),
+                    (uint16_t)(TIM2->CNT - cap));
+    }
+#endif
     if (pad_mode == PAD_MODE_MSX_MOUSE) {
         // CC1 = falling edge (CC1P=1 で設定)。
         // MSX View が観測する 1 サイクル = 8 nibble (4 byte) = 4 falling。
         // mid-cycle (2 falling 目) で acc を 0 にすると byte 3/4 が 0 になり
         // MSX View 側で異常動作する (右下ドリフト) ため、4 falling 目 (= 完全
-        // サイクル末) で初めて acc クリアする。DMA は 2 エントリ循環なので
+        // サイクル末) で初めてサイクル完了とする。DMA は 2 エントリ循環なので
         // 自然に byte 1/2 のニブルが byte 3/4 でも繰り返し返り、Original
         // protocol mouse の標準挙動 (byte 3/4 で byte 1/2 を繰り返す) と一致。
+        msx_in_cycle = 1;  // 以後サイクル完了まで LUT を固定 (on_cc は加算のみ)
         if (intfr & TIM_CC1IF) {
             if (++msx_falling_count >= 4) {
-                msx_falling_count = 0;
-                msx_dx_acc = 0;
-                msx_dy_acc = 0;
-                msx_rebuild_lut();
+                msx_end_cycle();
                 // DMA ポインタを先頭に戻す。3 エッジサイクル (初回の SET HIGH
                 // が edge を生まないケース) で rising 側ポインタがずれることが
                 // あるため、毎サイクル末で位置同期する。
@@ -431,16 +547,15 @@ void TIM3_IRQHandler(void) __attribute__((interrupt));
 void TIM3_IRQHandler(void) {
     if (TIM3->INTFR & TIM_UIF) {
         TIM3->INTFR = ~TIM_UIF;
+#ifdef MSX_DIAG
+        if (pad_mode == PAD_MODE_MSX_MOUSE) diag_record(4, 0);
+#endif
         if (pad_mode == PAD_MODE_MSX_MOUSE) {
-            // 3ms アイドル: MSX 側がサイクル間に入ったとみなす。
-            // 2-falling コミット (TIM2 CC ISR) が何らかの race / 取りこぼしで
-            // acc を 0 にできなかった場合の保険として、ここでも acc を 0 にする。
-            // 通常の MSX サイクル内 inter-strobe は最大 ~200us なのでアイドル
+            // 3ms アイドル: ホストがサイクル間に入ったとみなしてサイクル完了。
+            // FM TOWNS (1 サイクル 2 falling) はここで完了する。
+            // 通常のサイクル内 inter-strobe は最大 ~200us なのでアイドル
             // 3ms はサイクル中には発火しない。
-            msx_falling_count = 0;
-            msx_dx_acc = 0;
-            msx_dy_acc = 0;
-            msx_rebuild_lut();
+            msx_end_cycle();
         }
         // DMA ポインタを先頭 (X 上位 / X 下位) に戻す。
         md6_dma_reset();
@@ -587,14 +702,18 @@ void joystick_set_mode(uint8_t mode) {
         th_dma_src_falling = msx_lut_falling;
         th_dma_src_rising  = msx_lut_rising;
         th_dma_count       = 2;
-        msx_dx_acc = 0;
-        msx_dy_acc = 0;
-        msx_falling_count = 0;
         msx_btn_left = 0;
         msx_btn_right = 0;
-        msx_rebuild_lut();
+        msx_reset_motion();
         msx_update_button_pins();
         md6_dma_setup();   // TIM2 + DMA + TIM3 watchdog を共有
+        // STROBE 入力にデジタルフィルタ (ICF=1100: fDTS/16, N=8 ≒ 2.7us) を掛ける。
+        // FM TOWNS では STROBE 立ち上がり直後に DMA が D0-D3 を複数本同時に LOW へ
+        // 落とすと、その変化が立ち上がり途中の STROBE 入力に回り込んで falling+rising
+        // の偽エッジとなり、DMA ポインタが 1 周ずれて Y に X が読まれる (Y = X)。
+        // TOWNS / MSX ともエッジ間隔は 50us 以上あるので数 us の遅延は問題ない。
+        // md6_dma_setup が CHCTLR1 を毎回書き直すので他モードには影響しない。
+        TIM2->CHCTLR1 |= (0xC << 4) | (0xC << 12);  // IC1F / IC2F
         // MSX マウスのアイドルタイムアウトは 3ms (MD6 / LR の 1.8ms から上書き)
         TIM3->ATRLR = 3000 - 1;
         // 初期出力: TH の現在状態に応じて X 上位 (rising[0]) または X 下位 (falling[0])
@@ -674,9 +793,9 @@ static void joystick_fn_release_all(void) {
     if (pad_mode == PAD_MODE_MSX_MOUSE) {
         msx_btn_left = 0;
         msx_btn_right = 0;
-        msx_dx_acc = 0;
-        msx_dy_acc = 0;
-        msx_rebuild_lut();
+        __disable_irq();
+        msx_reset_motion();
+        __enable_irq();
         msx_update_button_pins();
     }
 }
@@ -704,24 +823,27 @@ static void joystick_fn_on_note_off(uint8_t note) {
 static void joystick_fn_on_cc(uint8_t cc, uint8_t value) {
     // MSX マウスモード時のみ DX/DY を受け付け、累積デルタへ加算する。
     // value はオフセット表現 (64 = 0、0 = -64、127 = +63)。
-    // acc を即座に更新し LUT も書き換える。サイクル完了時 (TIM2 CC ISR で
-    // 2 falling 検出) に 0 クリアされるため、次サイクル以降ドリフトしない。
+    // 読み取りサイクル外なら LUT にも即時反映する。サイクル中は加算のみで、
+    // サイクル完了時 (msx_end_cycle) に報告済み分を差し引いた残りが次の LUT になる。
     if (pad_mode != PAD_MODE_MSX_MOUSE) return;
+#ifdef MSX_DIAG
+    if (cc == 0x7F) { if (!diag_dumping) diag_n = 0; return; }
+#endif
+    if (cc != CC_MSX_DX && cc != CC_MSX_DY) return;
     int16_t delta = (int16_t)value - 64;
-    if (cc == CC_MSX_DX) {
-        int16_t sum = (int16_t)msx_dx_acc + delta;
-        if (sum > 127)  sum = 127;
-        if (sum < -128) sum = -128;
-        msx_dx_acc = (int8_t)sum;
-    } else if (cc == CC_MSX_DY) {
-        int16_t sum = (int16_t)msx_dy_acc + delta;
-        if (sum > 127)  sum = 127;
-        if (sum < -128) sum = -128;
-        msx_dy_acc = (int8_t)sum;
-    } else {
-        return;
-    }
-    msx_rebuild_lut();
+    __disable_irq();  // acc / rep / in_cycle は ISR (サイクル完了) とも共有
+    volatile int16_t* acc = (cc == CC_MSX_DX) ? &msx_dx_acc : &msx_dy_acc;
+    int16_t sum = *acc + delta;
+    if (sum >  MSX_ACC_MAX) sum =  MSX_ACC_MAX;
+    if (sum < -MSX_ACC_MAX) sum = -MSX_ACC_MAX;
+    *acc = sum;
+    // 最初のエッジの DMA 出力から ISR が in_cycle を立てるまでの数 us の間も
+    // サイクル中とみなすため、DMA の残カウントが進んでいないかも確認する。
+    uint8_t busy = msx_in_cycle ||
+                   DMA1_Channel5->CNTR != th_dma_count ||
+                   DMA1_Channel7->CNTR != th_dma_count;
+    if (!busy) msx_rebuild_lut();
+    __enable_irq();
 }
 
 static uint8_t joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int len) {
@@ -740,6 +862,9 @@ static uint8_t joystick_fn_on_set_config(uint8_t key, const uint8_t* val, int le
 
 static void joystick_fn_poll(void) {
     joystick_poll();
+#ifdef MSX_DIAG
+    diag_poll();
+#endif
 }
 
 static int joystick_fn_append_capabilities(uint8_t* buf, int max_len) {

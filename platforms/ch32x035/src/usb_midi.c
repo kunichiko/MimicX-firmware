@@ -103,6 +103,10 @@ int usb_midi_send_event(uint8_t cin, uint8_t midi0, uint8_t midi1, uint8_t midi2
     return 0;
 }
 
+int usb_midi_tx_free(void) {
+    return (MIDI_TX_BUF_SIZE - 1) - ((tx_head - tx_tail) & (MIDI_TX_BUF_SIZE - 1));
+}
+
 int usb_midi_send_sysex(const uint8_t* data, int len) {
     if (len < 2) return -1;
     int i = 0;
