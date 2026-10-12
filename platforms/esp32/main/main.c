@@ -13,7 +13,8 @@
 //   phone --BLE-MIDI--> ESP32 --I2C(0x33)--> CH32 --GPIO--> ターゲット機
 //   phone <--BLE-MIDI-- ESP32 <--I2C+INT---- CH32  (IDENTIFY_RSP / ACK / TARGET_RX 等)
 //
-// ESP32 が自分で応答するのは BRIDGE_IDENTIFY (0x0A→0x0B, §6.4.5) のみ。
+// ESP32 が自分で応答するのは BRIDGE_IDENTIFY (0x0A→0x0B, §6.4.5)、
+// BRIDGE_REBOOT_BOOTLOADER (0x0C, §6.4.6)、BRIDGE_LINK_INFO (0x0D→0x0E, §6.4.7)。
 // それ以外 (IDENTIFY / HEART_BEAT / SET_CONFIG / Note / CC ...) は全て CH32 へ転送。
 //
 // 構成:
@@ -93,6 +94,8 @@ static const char *TAG = "mimicx";
 #define CMD_BRIDGE_IDENTIFY_REQ 0x0A
 #define CMD_BRIDGE_IDENTIFY_RSP 0x0B
 #define CMD_BRIDGE_REBOOT_BL    0x0C
+#define CMD_BRIDGE_LINK_INFO_REQ 0x0D
+#define CMD_BRIDGE_LINK_INFO_RSP 0x0E
 #define CMD_RESET               0x7F
 
 #define ACK_OK                  0x00   // §6 ACK status
@@ -112,6 +115,19 @@ static uint8_t g_addr_type;
 static volatile bool g_ble_connected = false;   // GAP 接続状態 (切断通知の判定用)
 // 現在の GAP 接続ハンドル。ダウンロードモードへ落ちる前に明示切断するのに使う。
 static volatile uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+
+// 接続直後に要求する connection interval (1.25ms 単位)。根拠は gap_event_handler の
+// BLE_GAP_EVENT_CONNECT を参照。BRIDGE_LINK_INFO (§6.4.7) でも申告する。
+#define CONN_ITVL_REQ_MIN       9    // 11.25ms
+#define CONN_ITVL_REQ_MAX       12   // 15ms
+
+// BRIDGE_LINK_INFO (§6.4.7) 用の接続パラメータ履歴。接続ごとにリセットする。
+// 更新要求はセントラルに黙って拒否され得るので、要求の成否と実際の更新を分けて持つ。
+static uint16_t s_link_init_itvl;          // 接続直後 (要求前) の interval
+static bool     s_link_upd_requested;      // ble_gap_update_params() が rc=0
+static bool     s_link_upd_ok;             // status=0 の CONN_UPDATE を受けた
+static uint8_t  s_link_upd_count;          // CONN_UPDATE イベント数 (127 で飽和)
+static uint8_t  s_link_upd_status = 0x7F;  // 最後の CONN_UPDATE status (0x7F=未受信)
 
 static void start_advertising(void);
 
@@ -187,7 +203,7 @@ static void send_bridge_identify_response(uint8_t transport,
 
 // ---------------------------------------------------------------------------
 // 中継: phone(BLE) → CH32(I2C)
-//   BRIDGE_IDENTIFY のみブリッジが自答。それ以外は全て CH32 へ素通し。
+//   BRIDGE_IDENTIFY / REBOOT_BOOTLOADER / LINK_INFO はブリッジが自答。それ以外は全て CH32 へ素通し。
 // ---------------------------------------------------------------------------
 static bool is_bridge_identify_req(const uint8_t *m, int n) {
     return n >= 5 && m[0] == 0xF0 && m[1] == SYSEX_MFR_ID &&
@@ -306,6 +322,84 @@ static void handle_bridge_reboot_bl(const uint8_t *m, int n,
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// BRIDGE_LINK_INFO (0x0D → 0x0E, §6.4.7)
+//
+// phone との BLE リンクで実際に合意された接続パラメータを返す。iOS 等のセントラルは
+// 接続パラメータ更新要求を黙って拒否することがあり、合意値はこれまでシリアルログ
+// (log_conn_params) でしか見られなかった。ユーザ環境での入力遅延の切り分け用。
+// ブリッジ内で完結するので、ホストはこの往復時間を phone ⇄ ブリッジの RTT として使える。
+// ---------------------------------------------------------------------------
+static bool is_bridge_link_info_req(const uint8_t *m, int n) {
+    return n >= 5 && m[0] == 0xF0 && m[1] == SYSEX_MFR_ID &&
+           m[2] == SYSEX_SUB_ID && m[3] == CMD_BRIDGE_LINK_INFO_REQ;
+}
+
+// 16bit 値を 7bit × 2 (ビッグエンディアン) で詰める。§6.4.7 の値域は 14bit に収まる。
+static int put_u14(uint8_t *p, unsigned v) {
+    if (v > 0x3FFF) v = 0x3FFF;
+    p[0] = (uint8_t)((v >> 7) & 0x7F);
+    p[1] = (uint8_t)(v & 0x7F);
+    return 2;
+}
+
+static void handle_bridge_link_info(const uint8_t *m, int n, uint8_t transport,
+                                    void (*send)(const uint8_t *, int)) {
+    const uint8_t req_id = (n >= 6) ? m[4] : 0x00;
+
+    uint8_t flags = 0;
+    unsigned itvl = 0, lat = 0, tmo = 0, mtu = 0;
+    uint8_t tx_phy = 0, rx_phy = 0, rssi_neg = 0x7F;
+    const uint16_t conn = s_conn_handle;
+    struct ble_gap_conn_desc desc;
+    if (g_ble_connected && conn != BLE_HS_CONN_HANDLE_NONE &&
+        ble_gap_conn_find(conn, &desc) == 0) {
+        flags |= 0x01;
+        itvl = desc.conn_itvl;
+        lat  = desc.conn_latency;
+        tmo  = desc.supervision_timeout;
+        mtu  = ble_att_mtu(conn);
+        // PHY 読み出しは BLE 5 コントローラのみ (無印 ESP32 は失敗して 0=不明のまま)
+        uint8_t tp = 0, rp = 0;
+        if (ble_gap_read_le_phy(conn, &tp, &rp) == 0) {
+            tx_phy = tp;
+            rx_phy = rp;
+        }
+        int8_t rssi = 0;
+        if (ble_gap_conn_rssi(conn, &rssi) == 0 && rssi < 0) {
+            rssi_neg = (uint8_t)((-rssi) > 0x7E ? 0x7E : -rssi);
+        }
+    }
+    if (s_link_upd_requested) flags |= 0x02;
+    if (s_link_upd_ok)        flags |= 0x04;
+    const bool linked = (flags & 0x01) != 0;
+
+    uint8_t rsp[40];
+    int i = 0;
+    rsp[i++] = 0xF0;
+    rsp[i++] = SYSEX_MFR_ID;
+    rsp[i++] = SYSEX_SUB_ID;
+    rsp[i++] = CMD_BRIDGE_LINK_INFO_RSP;
+    rsp[i++] = req_id;
+    rsp[i++] = ACK_OK;
+    rsp[i++] = transport;
+    rsp[i++] = flags;
+    i += put_u14(&rsp[i], itvl);
+    i += put_u14(&rsp[i], lat);
+    i += put_u14(&rsp[i], tmo);
+    i += put_u14(&rsp[i], linked ? s_link_init_itvl : 0);
+    i += put_u14(&rsp[i], CONN_ITVL_REQ_MIN);
+    i += put_u14(&rsp[i], CONN_ITVL_REQ_MAX);
+    i += put_u14(&rsp[i], mtu);
+    rsp[i++] = tx_phy & 0x7F;
+    rsp[i++] = rx_phy & 0x7F;
+    rsp[i++] = rssi_neg;
+    rsp[i++] = linked ? s_link_upd_count : 0;
+    rsp[i++] = linked ? s_link_upd_status : 0x7F;
+    rsp[i++] = 0xF7;
+    send(rsp, i);
+}
+
 static void on_ble_rx(const uint8_t *msg, int len) {
     if (is_bridge_identify_req(msg, len)) {
         ESP_LOGI(TAG, "BRIDGE_IDENTIFY_REQUEST (BLE) -> self-answer");
@@ -314,6 +408,10 @@ static void on_ble_rx(const uint8_t *msg, int len) {
     }
     if (is_bridge_reboot_bl_req(msg, len)) {
         handle_bridge_reboot_bl(msg, len, ble_midi_notify);
+        return;
+    }
+    if (is_bridge_link_info_req(msg, len)) {
+        handle_bridge_link_info(msg, len, TRANSPORT_BLE, ble_midi_notify);
         return;
     }
     i2c_bridge_write(msg, len);   // それ以外は CH32 へ中継
@@ -329,6 +427,10 @@ static void on_usb_rx(const uint8_t *msg, int len) {
     }
     if (is_bridge_reboot_bl_req(msg, len)) {
         handle_bridge_reboot_bl(msg, len, usb_midi_bridge_notify);
+        return;
+    }
+    if (is_bridge_link_info_req(msg, len)) {
+        handle_bridge_link_info(msg, len, TRANSPORT_USB, usb_midi_bridge_notify);
         return;
     }
     i2c_bridge_write(msg, len);
@@ -417,6 +519,15 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 ble_midi_set_conn(event->connect.conn_handle);
                 // 要求前にホストが決めた値を出しておく (比較のため)
                 log_conn_params(event->connect.conn_handle, "on connect");
+                {
+                    struct ble_gap_conn_desc d0;
+                    s_link_init_itvl = (ble_gap_conn_find(event->connect.conn_handle, &d0) == 0)
+                                       ? d0.conn_itvl : 0;
+                }
+                s_link_upd_requested = false;
+                s_link_upd_ok = false;
+                s_link_upd_count = 0;
+                s_link_upd_status = 0x7F;
                 // レイテンシ低減のため connection interval を 11.25ms へ更新 (§2.3)。
                 //
                 // macOS 実機での実測経過 (HEART_BEAT RTT のうなり = 1000 mod CI ずつ
@@ -432,13 +543,14 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 // すると、レンジが潰れた時点で弾かれるので成立しない。
                 // よって 11.25-15ms が到達可能な最良値。
                 struct ble_gap_upd_params p = {
-                    .itvl_min = 9,    // 9 * 1.25ms = 11.25ms
-                    .itvl_max = 12,   // 12 * 1.25ms = 15ms
+                    .itvl_min = CONN_ITVL_REQ_MIN,   // 9 * 1.25ms = 11.25ms
+                    .itvl_max = CONN_ITVL_REQ_MAX,   // 12 * 1.25ms = 15ms
                     .latency  = 0,
                     .supervision_timeout = 400,  // 4s
                 };
                 int rc = ble_gap_update_params(event->connect.conn_handle, &p);
                 ESP_LOGI(TAG, "update_params request (11.25-15ms) rc=%d", rc);
+                s_link_upd_requested = (rc == 0);
             } else {
                 ESP_LOGW(TAG, "connect failed; status=%d", event->connect.status);
                 start_advertising();
@@ -460,6 +572,15 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
             // 接続パラメータが実際に変わったときに来る (要求が拒否された場合は
             // 来ないか、status != 0 で来る)。合意された値をそのまま出す。
             ESP_LOGI(TAG, "conn update; status=%d", event->conn_update.status);
+            if (s_link_upd_count < 127) s_link_upd_count++;
+            if (event->conn_update.status == 0) {
+                s_link_upd_status = 0;
+                s_link_upd_ok = true;
+            } else {
+                // 失敗コードの下位 7bit。0 (成功) / 0x7F (未受信) と紛れる値は 0x7E に寄せる
+                uint8_t st = (uint8_t)(event->conn_update.status & 0x7F);
+                s_link_upd_status = (st == 0 || st == 0x7F) ? 0x7E : st;
+            }
             log_conn_params(event->conn_update.conn_handle, "after update");
             return 0;
 
