@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mimic X (無線版 ESP32 / XIAO C6) Firmware Update</title>
+    <title>Mimic X (無線版 ESP32 / XIAO) Firmware Update</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -49,13 +49,13 @@
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
 </head>
 <body>
-    <h1>Mimic X 無線版 (ESP32 / XIAO C6) Firmware Update</h1>
+    <h1>Mimic X 無線版 (ESP32 / XIAO) Firmware Update</h1>
 
     <p>
         Mimic X ワイヤレスアダプタ (ESP32 系 + CH32X035 の 2 チップ構成) の
         無線側ファームウェアを Web ブラウザから書き込むページです。
         <strong>ESP32-WROOM-32</strong> / <strong>Seeed XIAO ESP32-C6</strong> /
-        <strong>XIAO ESP32-C3</strong> に対応し、接続したボードを自動判別して対応イメージを書き込みます。
+        <strong>XIAO ESP32-C3</strong> / <strong>XIAO ESP32-S3</strong> に対応し、接続したボードを自動判別して対応イメージを書き込みます。
         無線ファームは対応する CH32 ファームを内包しており、起動時に CH32 を自動同期します。
         プロジェクト: <a href="https://github.com/kunichiko/MimicX-firmware" target="_blank" rel="noopener">MimicX-firmware</a><br>
         CH32 単体 (USB 直結版) の書き込みは <a href="./index.html">こちら (WebUSB フラッシャー)</a>。
@@ -64,9 +64,9 @@
     <div class="section">
         <h3>準備</h3>
         <div class="steps">
-            <div class="step">ボードを USB ケーブルで PC に接続する (BOOT 操作は不要。esptool が自動でブートローダへ入れます)</div>
+            <div class="step">ボードを USB ケーブルで PC に接続する (ESP32 / XIAO C3 / XIAO C6 は BOOT 操作不要。esptool が自動でブートローダへ入れます。<strong>XIAO S3 は下の「XIAO S3 を書き込みモードにする」を先に行ってください</strong>)</div>
             <div class="step">基板に合うバリアントとバージョンを選択する</div>
-            <div class="step">「CONNECT」ボタンを押し、シリアルポートを選択する (ESP32 は CP210x / CH340 等、XIAO C6 は USB シリアル)</div>
+            <div class="step">「CONNECT」ボタンを押し、シリアルポートを選択する (ESP32 は CP210x / CH340 等、XIAO C3 / C6 は USB シリアル、XIAO S3 は書き込みモードで現れる "ESP32_S3" 等)</div>
             <div class="step">「INSTALL」を押して書き込む (接続チップを自動判別。フラッシュ全体を上書きします)</div>
         </div>
         <div class="warning">
@@ -84,10 +84,29 @@
             <code>idf.py flash</code> でのネイティブ書き込みをご利用ください。
         </div>
         <div class="warning">
-            ⚠ <strong>XIAO ESP32-S3</strong>: 書き込み完了後、ROM ダウンロードモードに残って
+            ⚠ <strong>XIAO ESP32-S3</strong>: Mimic X のファームが動いている間は USB-MIDI デバイス
+            ("Mimic X (Bridge)") として動作するため、<strong>そのままでは CONNECT の一覧に出てきません</strong>。
+            先に下の「XIAO S3 を書き込みモードにする」を行うか、<strong>BOOT ボタンを押したまま USB を
+            挿して</strong> ROM ダウンロードモードで起動してください。<br><br>
+            書き込み完了後、ROM ダウンロードモードに残って
             USB-MIDI デバイスが現れないことがあります。<strong>RESET ボタンを一度押す</strong>
             (または USB を挿し直す) と "Mimic X (Bridge)" として認識されます。
         </div>
+    </div>
+
+    <div class="section">
+        <h3>XIAO S3 を書き込みモードにする</h3>
+        <p style="font-size: 14px; line-height: 1.6; margin-top: 0;">
+            USB で接続した XIAO S3 アダプタ ("Mimic X (Bridge)") に MIDI でコマンドを送り、
+            ROM ダウンロードモードで再起動させます (BOOT ボタン操作の代わり)。ブラウザが
+            MIDI デバイスへのアクセス許可を求めたら「許可」してください。
+            <strong>ファームウェア v1.2.0 以降</strong>が必要です。それより古い場合や、
+            うまくいかない場合は BOOT ボタンを押したまま USB を挿してください。
+            Windows では Mimic X アプリを終了してから行ってください (MIDI ポートを
+            アプリが使用中だと送れません)。
+        </p>
+        <button id="s3-boot-btn" type="button" style="padding: 8px 16px; border: none; border-radius: 4px; background: #00d2ff; color: #000; font-weight: bold; cursor: pointer;">XIAO S3 を書き込みモードにする</button>
+        <div id="s3-boot-status" class="version-info" style="margin-top: 8px;"></div>
     </div>
 
     <div class="section">
@@ -301,6 +320,75 @@
             firmwareSize.textContent = `対応ボード: ${Object.keys(rel.urls).map(b => BOARD_LABEL[b]).join(' / ')}`;
             setManifest(v, rel);
             setStatus('「CONNECT」を押してボードのシリアルポートを選択してください');
+        });
+
+        // ------------------------------------------------------------------
+        // XIAO S3: BRIDGE_REBOOT_BOOTLOADER (protocol §6.4.6) を Web MIDI で送る。
+        //   F0 7D 01 0C <req_id> 'B' 'O' 'T' F7  →  ACK F0 7D 01 06 <req_id> <status> 0C F7
+        // ACK の約 300ms 後に USB-MIDI が消え、ROM ダウンロードモード (シリアル) で
+        // 再列挙される。v1.2.0 未満のブリッジは CH32 へ中継してしまい、CH32 が
+        // UNKNOWN_COMMAND を返す (再起動はしない)。
+        // ------------------------------------------------------------------
+        const s3BootBtn = document.getElementById('s3-boot-btn');
+        const s3BootStatus = document.getElementById('s3-boot-status');
+        const BRIDGE_PORT_NAME = 'Mimic X (Bridge)';
+
+        function s3Status(msg, color) {
+            s3BootStatus.textContent = msg;
+            s3BootStatus.style.color = color || '';
+        }
+
+        s3BootBtn.addEventListener('click', async () => {
+            if (!navigator.requestMIDIAccess) {
+                s3Status('このブラウザは Web MIDI に対応していません。BOOT ボタンを押したまま USB を挿してください。', '#e94560');
+                return;
+            }
+            s3BootBtn.disabled = true;
+            try {
+                s3Status('MIDI デバイスを探しています...');
+                const access = await navigator.requestMIDIAccess({ sysex: true });
+                const outs = [...access.outputs.values()].filter(p => (p.name || '').includes(BRIDGE_PORT_NAME));
+                const ins = [...access.inputs.values()].filter(p => (p.name || '').includes(BRIDGE_PORT_NAME));
+                if (outs.length === 0) {
+                    s3Status(`"${BRIDGE_PORT_NAME}" が見つかりません。USB で接続されているか確認してください (すでに書き込みモードなら、そのまま CONNECT へ進めます)。`, '#e94560');
+                    return;
+                }
+                if (outs.length > 1) {
+                    s3Status(`"${BRIDGE_PORT_NAME}" が ${outs.length} 台あります。書き込むアダプタ 1 台だけを接続してください。`, '#e94560');
+                    return;
+                }
+                const reqId = 0x01 + Math.floor(Math.random() * 0x7E);
+                const ack = new Promise(resolve => {
+                    const timer = setTimeout(() => resolve(null), 2000);
+                    for (const inp of ins) {
+                        inp.onmidimessage = ev => {
+                            const d = ev.data;
+                            if (d.length >= 8 && d[0] === 0xF0 && d[1] === 0x7D && d[2] === 0x01 &&
+                                d[3] === 0x06 && d[4] === reqId && d[6] === 0x0C) {
+                                clearTimeout(timer);
+                                resolve(d[5]);
+                            }
+                        };
+                    }
+                });
+                outs[0].send([0xF0, 0x7D, 0x01, 0x0C, reqId, 0x42, 0x4F, 0x54, 0xF7]);
+                s3Status('コマンドを送信しました。応答を待っています...');
+                const st = await ack;
+                for (const inp of ins) inp.onmidimessage = null;
+                if (st === 0x00) {
+                    s3Status('書き込みモードに切り替えました。数秒待ってから「CONNECT」を押し、"ESP32_S3" (または "USB JTAG/serial debug unit") のポートを選択してください。', '#53d769');
+                } else if (st === 0x01) {
+                    s3Status('このアダプタのファームウェアはコマンドに対応していません (v1.2.0 未満、または XIAO S3 以外)。BOOT ボタンを押したまま USB を挿してください。', '#e94560');
+                } else if (st === null) {
+                    s3Status('応答がありませんでした。数秒待っても CONNECT の一覧に "ESP32_S3" が出なければ、USB を挿し直すか、BOOT ボタンを押したまま USB を挿してください。', '#ffd700');
+                } else {
+                    s3Status(`アダプタが拒否しました (status 0x${st.toString(16)})。BOOT ボタンを押したまま USB を挿してください。`, '#e94560');
+                }
+            } catch (e) {
+                s3Status(`MIDI デバイスにアクセスできませんでした (${e.message})。BOOT ボタンを押したまま USB を挿してください。`, '#e94560');
+            } finally {
+                s3BootBtn.disabled = false;
+            }
         });
 
         (async () => {
