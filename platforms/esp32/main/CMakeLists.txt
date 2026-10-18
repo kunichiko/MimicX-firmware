@@ -56,3 +56,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
 # ch32_swd.c のみ該当警告を無効化する (-Werror 回避)。
 set_source_files_properties(ch32_swd.c PROPERTIES
     COMPILE_FLAGS "-Wno-unused-function -Wno-unused-but-set-variable")
+
+# 接続間隔フォールバックの確認用 (main.c の k_conn_itvl_ladder 参照)。
+# 例: idf.py -DMIMICX_CONN_LADDER_TEST=1 build  (リリースでは使わない)
+if(MIMICX_CONN_LADDER_TEST)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONN_LADDER_TEST=1)
+endif()

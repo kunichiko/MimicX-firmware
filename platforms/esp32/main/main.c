@@ -116,10 +116,27 @@ static volatile bool g_ble_connected = false;   // GAP 接続状態 (切断通�
 // 現在の GAP 接続ハンドル。ダウンロードモードへ落ちる前に明示切断するのに使う。
 static volatile uint16_t s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
 
-// 接続直後に要求する connection interval (1.25ms 単位)。根拠は gap_event_handler の
-// BLE_GAP_EVENT_CONNECT を参照。BRIDGE_LINK_INFO (§6.4.7) でも申告する。
-#define CONN_ITVL_REQ_MIN       9    // 11.25ms
-#define CONN_ITVL_REQ_MAX       12   // 15ms
+// 接続直後に要求する connection interval の候補 (1.25ms 単位)。セントラルが
+// status != 0 の CONN_UPDATE で拒否してきたら次の候補で要求し直す。根拠は
+// gap_event_handler の BLE_GAP_EVENT_CONNECT / CONN_UPDATE を参照。
+//   [0] 11.25-15ms : macOS / iOS 27 はこれを受理して 15ms になる
+//   [1] 15ms 固定  : iOS 26.6.1 は [0] を 0x3B (Unacceptable Connection Parameters)
+//                    で拒否した。Apple ガイドラインの「下限 15ms 以上」を満たす最短
+//   [2] 15-30ms    : ガイドラインどおりのレンジ。macOS は上限 30ms を選んだので
+//                    効果は薄いが、セントラルが 15ms を選ぶ可能性に賭ける
+// CONN_LADDER_TEST を定義すると、拒否されることが分かっている 11.25ms 固定を先頭に
+// 足して、手元の (先頭候補を受理してしまう) 環境でフォールバック動作を確認できる。
+typedef struct { uint16_t min, max; } conn_itvl_req_t;
+static const conn_itvl_req_t k_conn_itvl_ladder[] = {
+#if defined(CONN_LADDER_TEST)
+    { 9,  9 },    // 11.25ms 固定 (macOS はレンジを潰すと拒否する)
+#endif
+    { 9,  12 },   // 11.25-15ms
+    { 12, 12 },   // 15ms
+    { 12, 24 },   // 15-30ms
+};
+#define CONN_ITVL_LADDER_LEN \
+    (sizeof(k_conn_itvl_ladder) / sizeof(k_conn_itvl_ladder[0]))
 
 // BRIDGE_LINK_INFO (§6.4.7) 用の接続パラメータ履歴。接続ごとにリセットする。
 // 更新要求はセントラルに黙って拒否され得るので、要求の成否と実際の更新を分けて持つ。
@@ -128,6 +145,7 @@ static bool     s_link_upd_requested;      // ble_gap_update_params() が rc=0
 static bool     s_link_upd_ok;             // status=0 の CONN_UPDATE を受けた
 static uint8_t  s_link_upd_count;          // CONN_UPDATE イベント数 (127 で飽和)
 static uint8_t  s_link_upd_status = 0x7F;  // 最後の CONN_UPDATE status (0x7F=未受信)
+static uint8_t  s_link_req_step;           // 最後に要求した k_conn_itvl_ladder の添字
 
 static void start_advertising(void);
 
@@ -388,8 +406,10 @@ static void handle_bridge_link_info(const uint8_t *m, int n, uint8_t transport,
     i += put_u14(&rsp[i], lat);
     i += put_u14(&rsp[i], tmo);
     i += put_u14(&rsp[i], linked ? s_link_init_itvl : 0);
-    i += put_u14(&rsp[i], CONN_ITVL_REQ_MIN);
-    i += put_u14(&rsp[i], CONN_ITVL_REQ_MAX);
+    // 最後に要求した候補 (フォールバック後はその値)。未接続時も先頭候補を返す
+    const conn_itvl_req_t *req = &k_conn_itvl_ladder[linked ? s_link_req_step : 0];
+    i += put_u14(&rsp[i], req->min);
+    i += put_u14(&rsp[i], req->max);
     i += put_u14(&rsp[i], mtu);
     rsp[i++] = tx_phy & 0x7F;
     rsp[i++] = rx_phy & 0x7F;
@@ -505,6 +525,44 @@ static void log_conn_params(uint16_t conn_handle, const char *when) {
 }
 
 
+// connection interval の更新を k_conn_itvl_ladder[step] で要求する。
+static void request_conn_itvl(uint16_t conn_handle, uint8_t step) {
+    const conn_itvl_req_t *c = &k_conn_itvl_ladder[step];
+    struct ble_gap_upd_params p = {
+        .itvl_min = c->min,
+        .itvl_max = c->max,
+        .latency  = 0,
+        .supervision_timeout = 400,  // 4s
+    };
+    s_link_req_step = step;
+    int rc = ble_gap_update_params(conn_handle, &p);
+    unsigned mn = (unsigned)c->min * 125u, mx = (unsigned)c->max * 125u;
+    ESP_LOGI(TAG, "update_params request #%u (%u.%02u-%u.%02u ms) rc=%d", step,
+             mn / 100u, mn % 100u, mx / 100u, mx % 100u, rc);
+    if (step == 0) s_link_upd_requested = (rc == 0);
+}
+
+static void conn_itvl_retry_cb(void *arg) {
+    (void)arg;
+    const uint16_t conn = s_conn_handle;
+    if (!g_ble_connected || conn == BLE_HS_CONN_HANDLE_NONE || s_link_upd_ok) return;
+    if (s_link_req_step + 1u >= CONN_ITVL_LADDER_LEN) return;
+    request_conn_itvl(conn, (uint8_t)(s_link_req_step + 1u));
+}
+
+static void schedule_conn_itvl_retry(void) {
+    static esp_timer_handle_t s_timer;
+    if (s_timer == NULL) {
+        const esp_timer_create_args_t args = {
+            .callback = conn_itvl_retry_cb,
+            .name = "conn_itvl_retry",
+        };
+        if (esp_timer_create(&args, &s_timer) != ESP_OK) return;
+    }
+    esp_timer_stop(s_timer);
+    esp_timer_start_once(s_timer, 200 * 1000);   // 200ms
+}
+
 // ---------------------------------------------------------------------------
 // GAP イベント
 // ---------------------------------------------------------------------------
@@ -541,16 +599,12 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 // macOS は「下限 11.25ms 以上」かつ「レンジに幅があること」を要求し、
                 // その上で上限を選ぶ。上限を選ぶ性質を利用して下限に張り付かせようと
                 // すると、レンジが潰れた時点で弾かれるので成立しない。
-                // よって 11.25-15ms が到達可能な最良値。
-                struct ble_gap_upd_params p = {
-                    .itvl_min = CONN_ITVL_REQ_MIN,   // 9 * 1.25ms = 11.25ms
-                    .itvl_max = CONN_ITVL_REQ_MAX,   // 12 * 1.25ms = 15ms
-                    .latency  = 0,
-                    .supervision_timeout = 400,  // 4s
-                };
-                int rc = ble_gap_update_params(event->connect.conn_handle, &p);
-                ESP_LOGI(TAG, "update_params request (11.25-15ms) rc=%d", rc);
-                s_link_upd_requested = (rc == 0);
+                // よって 11.25-15ms が macOS で到達可能な最良値。
+                //
+                // ただし iOS 26.6.1 はこれを status 0x3B で拒否した (iOS 27 は受理)。
+                // OS ごとに許容範囲が違うので、拒否されたら候補を順に下げて
+                // 要求し直す (request_conn_itvl / BLE_GAP_EVENT_CONN_UPDATE)。
+                request_conn_itvl(event->connect.conn_handle, 0);
             } else {
                 ESP_LOGW(TAG, "connect failed; status=%d", event->connect.status);
                 start_advertising();
@@ -580,6 +634,11 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
                 // 失敗コードの下位 7bit。0 (成功) / 0x7F (未受信) と紛れる値は 0x7E に寄せる
                 uint8_t st = (uint8_t)(event->conn_update.status & 0x7F);
                 s_link_upd_status = (st == 0 || st == 0x7F) ? 0x7E : st;
+                // 拒否された → 次の候補で要求し直す。イベントコールバック内で
+                // 次の手続きを始めず、少し間を置いてタイマーから出す
+                if (!s_link_upd_ok && s_link_req_step + 1u < CONN_ITVL_LADDER_LEN) {
+                    schedule_conn_itvl_retry();
+                }
             }
             log_conn_params(event->conn_update.conn_handle, "after update");
             return 0;
